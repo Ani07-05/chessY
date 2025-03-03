@@ -34,10 +34,11 @@ export async function GET() {
       .select('*')
       .eq('status', 'active');
 
+    // Get recent logins from the users table instead of auth.users
     const { data: recentLogins } = await supabase
-      .from('auth.users')
-      .select('last_sign_in_at')
-      .order('last_sign_in_at', { ascending: false })
+      .from('users')
+      .select('created_at as last_sign_in_at')
+      .order('created_at', { ascending: false })
       .limit(10);
 
     return NextResponse.json({
@@ -51,8 +52,13 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    // Get request body
+    const body = await request.json().catch(() => ({}));
+    const { channelId } = body;
+    
+    // Check authentication and authorization
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -73,8 +79,11 @@ export async function POST() {
       .from('streams')
       .upsert({
         user_id: session.user.id,
+        youtube_url: channelId || '',
+        title: 'Live Stream',
         status: 'active',
-        started_at: new Date().toISOString()
+        started_at: new Date().toISOString(),
+        is_live: true
       })
       .select()
       .single();

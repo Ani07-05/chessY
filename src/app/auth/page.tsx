@@ -1,41 +1,120 @@
 'use client';
 
-import { useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { useState, useEffect } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
+import { useSearchParams, useRouter } from 'next/navigation';
 
 export default function AuthPage() {
-  const [username, setUsername] = useState('');
+  const router = useRouter();
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [chessUsername, setChessUsername] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+  const [clientReady, setClientReady] = useState(false);
+  const searchParams = useSearchParams();
 
-  const supabase = createClient(
+  // Initialize Supabase client
+  const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL || '',
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
   );
+  
+  useEffect(() => {
+    // Set client as ready immediately since we're using the auth-helpers client
+    setClientReady(true);
+  }, []);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!clientReady) {
+      setError('Client is not ready yet. Please try again.');
+      return;
+    }
+
     setError('');
+    setSuccessMessage('');
+    setLoading(true);
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: username,
-        password: password
-      });
+      if (isSignUp) {
+        // Handle registration
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
+            data: {
+              chess_username: chessUsername,
+              role: email === 'paathabot@gmail.com' ? 'superadmin' : 'user'
+            }
+          }
+        });
 
-      if (error) throw error;
-      if (data?.user) {
-        window.location.href = '/dashboard';
+        if (error) throw error;
+
+        if (data.user) {
+          setSuccessMessage('Account created! Please check your email to confirm your registration.');
+          // Don't redirect yet as they need to verify their email
+        }
+      } else {
+        // Handle sign in
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
+
+        if (error) throw error;
+
+        if (data?.user) {
+          // Check if user is superadmin
+          const { data: userData, error: userError } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', data.user.id)
+            .single();
+          
+          if (userError) throw userError;
+          
+          // Superadmin should always go to admin page
+          if (userData?.role === 'superadmin') {
+            router.replace('/admin');
+            return;
+          }
+          
+          // For regular users, respect the redirect parameter
+          const redirectPath = searchParams.get('redirect');
+          router.replace(redirectPath ? decodeURIComponent(redirectPath) : '/dashboard');
+        }
       }
     } catch (err: any) {
       setError(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
+  const toggleMode = () => {
+    setIsSignUp(!isSignUp);
+    setError('');
+    setSuccessMessage('');
+  };
+
+  // Add a fallback for when the page is loading
+  if (!clientReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-black p-4">
+        <div className="max-w-md w-full space-y-8 bg-gray-900 p-8 rounded-xl shadow-2xl border border-gray-800">
+          <div className="text-center text-white">Initializing...</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-black p-4 bg-[url('/chess-pattern.png')] bg-opacity-90">
+    <div className="min-h-screen flex items-center justify-center bg-black p-4">
       <div className="max-w-md w-full space-y-8 bg-gray-900 p-8 rounded-xl shadow-2xl border border-gray-800">
         <div>
           <h2 className="text-center text-4xl font-bold text-white mb-2">
@@ -46,18 +125,18 @@ export default function AuthPage() {
         <form className="mt-8 space-y-6" onSubmit={handleAuth}>
           <div className="space-y-4 rounded-md">
             <div>
-              <label htmlFor="username" className="block text-sm font-medium text-gray-300 mb-1">
+              <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1">
                 Email
               </label>
               <input
-                id="username"
-                name="username"
+                id="email"
+                name="email"
                 type="email"
                 required
                 className="appearance-none rounded-lg relative block w-full px-3 py-2 border border-gray-700 bg-gray-800 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all duration-200"
                 placeholder="Enter your email"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
               />
             </div>
             <div>
@@ -73,6 +152,7 @@ export default function AuthPage() {
                 placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                minLength={6}
               />
             </div>
             {isSignUp && (
@@ -84,7 +164,7 @@ export default function AuthPage() {
                   id="chess-username"
                   name="chess-username"
                   type="text"
-                  required
+                  required={isSignUp}
                   className="appearance-none rounded-lg relative block w-full px-3 py-2 border border-gray-700 bg-gray-800 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all duration-200"
                   placeholder="Your Chess.com username"
                   value={chessUsername}
@@ -97,13 +177,20 @@ export default function AuthPage() {
           {error && (
             <div className="text-red-400 text-sm text-center bg-red-900/20 p-2 rounded">{error}</div>
           )}
+          
+          {successMessage && (
+            <div className="text-green-400 text-sm text-center bg-green-900/20 p-2 rounded">{successMessage}</div>
+          )}
 
           <div>
             <button
               type="submit"
-              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-lg text-black bg-white hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-white transition-all duration-200"
+              disabled={loading}
+              className={`group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-lg text-black bg-white hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-white transition-all duration-200 ${
+                loading ? 'opacity-70 cursor-not-allowed' : ''
+              }`}
             >
-              {isSignUp ? 'Sign Up' : 'Sign In'}
+              {loading ? 'Processing...' : isSignUp ? 'Sign Up' : 'Sign In'}
             </button>
           </div>
 
@@ -111,7 +198,7 @@ export default function AuthPage() {
             <button
               type="button"
               className="text-sm text-gray-400 hover:text-white transition-colors duration-200"
-              onClick={() => setIsSignUp(!isSignUp)}
+              onClick={toggleMode}
             >
               {isSignUp
                 ? 'Already have an account? Sign in'
