@@ -1,4 +1,5 @@
-import { createServerClient } from '@supabase/ssr';
+// app/auth/callback/route.ts
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -8,20 +9,15 @@ export async function GET(request: NextRequest) {
   const code = requestUrl.searchParams.get('code');
 
   if (code) {
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
-      {
-        cookies: {
-          get: async (name) => (await cookies()).get(name)?.value,
-          set: async (name, value, options) => (await cookies()).set(name, value, options),
-          remove: async (name, options) => (await cookies()).delete(name, options)
-        }
-      }
-    );
+    const cookieStore = cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+    
     await supabase.auth.exchangeCodeForSession(code);
+
+    // After successful authentication, redirect to dashboard
+    return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
-  // URL to redirect to after sign in process completes
-  return NextResponse.redirect(new URL('/dashboard', request.url));
+  // If there's no code, redirect to auth page
+  return NextResponse.redirect(new URL('/auth', request.url));
 }

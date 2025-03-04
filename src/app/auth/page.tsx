@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { createBrowserClient } from '@supabase/ssr';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 export default function AuthPage() {
@@ -17,15 +17,44 @@ export default function AuthPage() {
   const searchParams = useSearchParams();
 
   // Initialize Supabase client
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-  );
+  const supabase = createClientComponentClient();
   
   useEffect(() => {
-    // Set client as ready immediately since we're using the auth-helpers client
-    setClientReady(true);
-  }, []);
+    // Check if already authenticated
+    const checkAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session) {
+          // Check if user is superadmin
+          const { data: userData, error: userError } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', session.user.id)
+            .single();
+          
+          if (userError) {
+            console.error('Error fetching user role:', userError);
+            return;
+          }
+          
+          if (userData?.role === 'superadmin') {
+            router.replace('/admin');
+            return;
+          }
+          
+          const redirectPath = searchParams.get('redirect');
+          router.replace(redirectPath ? decodeURIComponent(redirectPath) : '/dashboard');
+        }
+      } catch (err) {
+        console.error('Error checking authentication:', err);
+      } finally {
+        setClientReady(true);
+      }
+    };
+    
+    checkAuth();
+  }, [router, searchParams, supabase]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
