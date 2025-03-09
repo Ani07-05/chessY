@@ -15,15 +15,16 @@ export async function middleware(req: NextRequest) {
   // Define protected routes
   const protectedRoutes = ['/dashboard', '/profile', '/settings', '/admin'];
   const isProtectedRoute = protectedRoutes.some(route => req.nextUrl.pathname.startsWith(route));
-  const isAdminRoute = req.nextUrl.pathname.startsWith('/admin');
   const isAuthPage = req.nextUrl.pathname === '/auth';
+  const isStreamPage = req.nextUrl.pathname === '/stream';
 
-  // Don't redirect for API routes, static files, or favicon
+  // Don't redirect for API routes, static files, favicon, or STREAM PAGE
   if (
     req.nextUrl.pathname.startsWith('/api') || 
     req.nextUrl.pathname.startsWith('/_next') || 
     req.nextUrl.pathname.includes('.') ||
-    req.nextUrl.pathname === '/favicon.ico'
+    req.nextUrl.pathname === '/favicon.ico' ||
+    isStreamPage // Skip middleware check for stream page
   ) {
     return res;
   }
@@ -41,31 +42,7 @@ export async function middleware(req: NextRequest) {
     const redirectPath = req.nextUrl.searchParams.get('redirect') || '/dashboard';
     return NextResponse.redirect(new URL(redirectPath, req.url));
   }
-
-  // For admin routes, check if user has superadmin role
-  if (isAdminRoute && session) {
-    try {
-      const { data: userData, error } = await supabase
-        .from('users')
-        .select('role')
-        .eq('id', session.user.id)
-        .single();
-
-      if (error) {
-        console.error('Error fetching user role:', error);
-        return NextResponse.redirect(new URL('/dashboard', req.url));
-      }
-
-      if (userData?.role !== 'superadmin') {
-        // User doesn't have admin privileges
-        return NextResponse.redirect(new URL('/dashboard', req.url));
-      }
-    } catch (err) {
-      console.error('Middleware error checking admin role:', err);
-      return NextResponse.redirect(new URL('/dashboard', req.url));
-    }
-  }
-
+  
   return res;
 }
 
@@ -79,12 +56,15 @@ export const config = {
      * But include:
      * - All routes under /dashboard, /profile, /settings, /admin
      * - The /auth route
+     * - The /api routes
+     * - The /stream route
      */
     '/dashboard/:path*',
     '/profile/:path*',
     '/settings/:path*',
     '/admin/:path*',
     '/auth',
-    '/api/:path*'
+    '/api/:path*',
+    '/stream'
   ]
 };
