@@ -105,36 +105,65 @@ export default function Dashboard() {
 
   const fetchUserProfile = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError) throw sessionError;
       
       if (!session) {
         router.push("/auth");
         return;
       }
+
+      const { data: profile, error: fetchError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', session.user.id)
+        .maybeSingle();
       
-      const { data: userData, error: userError } = await supabase
-        .from("users")
-        .select("*")
-        .eq("id", session.user.id)
-        .single();
-      
-      if (userError) throw userError;
-      
-      if (userData) {
-        setUserProfile({
-          id: userData.id,
-          username: userData.username || session.user.email?.split("@")[0] || "User",
-          chessUsername: userData.chess_username || "magnuscarlsen",
-          role: userData.role || "user",
-          avatarUrl: userData.avatar_url,
-          email: session.user.email
-        });
+      if (fetchError) throw fetchError;
+
+      if (!profile) {
+        // Create profile if it doesn't exist
+        const { data: newProfile, error: insertError } = await supabase
+          .from('users')
+          .insert([
+            {
+              id: session.user.id,
+              email: session.user.email,
+              username: session.user.email?.split('@')[0] || 'User',
+              chess_username: 'magnuscarlsen'
+            }
+          ])
+          .select()
+          .single();
         
-        setUsername(userData.chess_username || "magnuscarlsen");
-        setIsSuperAdmin(userData.role === "superadmin");
+        if (insertError) throw insertError;
+        
+        if (newProfile) {
+          setUserProfile({
+            id: newProfile.id,
+            username: newProfile.username,
+            chessUsername: newProfile.chess_username,
+            role: 'user',
+            email: newProfile.email,
+            avatarUrl: newProfile.avatar_url
+          });
+          setUsername(newProfile.chess_username);
+        }
+      } else {
+        setUserProfile({
+          id: profile.id,
+          username: profile.username || session.user.email?.split('@')[0] || 'User',
+          chessUsername: profile.chess_username || 'magnuscarlsen',
+          role: 'user',
+          email: profile.email,
+          avatarUrl: profile.avatar_url
+        });
+        setUsername(profile.chess_username || 'magnuscarlsen');
       }
     } catch (err) {
-      console.error("Error fetching user profile:", err);
+      console.error('Error fetching user profile:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load user profile');
     }
   };
 
@@ -343,7 +372,25 @@ export default function Dashboard() {
 
   const getWinRateData = (type: 'chess_rapid' | 'chess_blitz' | 'chess_bullet') => {
     const record = stats?.[type]?.record;
-    if (!record) return { labels: [], data: [] };
+    const emptyData = {
+      labels: ['Wins', 'Losses', 'Draws'],
+      datasets: [{
+        data: [0, 0, 0],
+        backgroundColor: [
+          'rgba(34, 197, 94, 0.8)',
+          'rgba(239, 68, 68, 0.8)',
+          'rgba(234, 179, 8, 0.8)'
+        ],
+        borderColor: [
+          'rgba(34, 197, 94, 1)',
+          'rgba(239, 68, 68, 1)',
+          'rgba(234, 179, 8, 1)'
+        ],
+        borderWidth: 2
+      }]
+    };
+
+    if (!record) return emptyData;
 
     return {
       labels: ['Wins', 'Losses', 'Draws'],

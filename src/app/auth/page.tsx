@@ -42,78 +42,67 @@ export default function AuthPage() {
     }
   }, []);
 
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
+  const handleAuth = async (event: React.FormEvent) => {
+    event.preventDefault();
     setLoading(true);
+    setError("");
 
     try {
-      // Handle superuser login completely separately
-      if (isSuperuser) {
-        console.log('Attempting superuser login with password:', password);
-        if (password === 'ChessY@2025') {
-          console.log('Superuser password correct, navigating to stream page');
-          navigateAsSuperuser();
-          return;
-        } else {
-          throw new Error('Invalid superuser password');
-        }
-      }
-
-      // Regular auth flow
       if (isSignUp) {
-        // Handle registration
-        const { data, error } = await supabase.auth.signUp({
+        // Step 1: Create auth user
+        const { data: authData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
             data: {
-              chess_username: chessUsername,
-              role: email === 'paathabot@gmail.com' ? 'superadmin' : 'user'
+              username: email.split('@')[0],
+              chess_username: chessUsername || 'magnuscarlsen'
             }
           }
         });
 
-        if (error) throw error;
+        if (signUpError) throw signUpError;
 
-        if (data.user) {
-          setSuccessMessage('Account created! Please check your email to confirm your registration.');
-          // Don't redirect yet as they need to verify their email
+       // Check if the auth user creation was successful with the correct format
+      if (authData.user) {
+  // Make sure we're using the correct ID format
+      const userId = authData.user.id;
+  
+      const { error: profileError } = await supabase
+        .from('users')
+        .insert([
+        {
+          id: userId,
+          email: authData.user.email,
+          username: email.split('@')[0], // Getting directly from form input
+          chess_username: chessUsername || 'magnuscarlsen'
+        }
+        ]);
+    
+  // Rest of your code...
+
+
+          if (profileError) {
+            console.error("Profile creation error:", profileError);
+            throw new Error(`Failed to create user profile: ${profileError.message}`);
+          }
+
+          setSuccessMessage("Account created successfully!");
+          router.push('/dashboard');
         }
       } else {
-        // Handle sign in
-        const { data, error } = await supabase.auth.signInWithPassword({
+        // Regular sign in
+        const { error: signInError } = await supabase.auth.signInWithPassword({
           email,
-          password
+          password,
         });
 
-        if (error) throw error;
-
-        if (data?.user) {
-          // Check if user is superadmin
-          const { data: userData, error: userError } = await supabase
-            .from('users')
-            .select('role')
-            .eq('id', data.user.id)
-            .single();
-          
-          if (userError) throw userError;
-          
-          // Superadmin should always go to admin page
-          if (userData?.role === 'superadmin') {
-            router.replace('/admin');
-            return;
-          }
-          
-          // For regular users, respect the redirect parameter
-          const redirectPath = searchParams.get('redirect');
-          router.replace(redirectPath ? decodeURIComponent(redirectPath) : '/dashboard');
-        }
+        if (signInError) throw signInError;
+        router.push('/dashboard');
       }
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Auth error:', err.message);
+    } catch (err) {
+      console.error("Auth error:", err);
+      setError(err instanceof Error ? err.message : "An error occurred during authentication");
     } finally {
       setLoading(false);
     }
@@ -137,54 +126,57 @@ export default function AuthPage() {
         <form className="mt-8 space-y-6" onSubmit={handleAuth}>
           <div className="space-y-4 rounded-md">
             {!isSuperuser && (
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1">
-                  Email
-                </label>
-                <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  required={!isSuperuser}
-                  className="appearance-none rounded-lg relative block w-full px-3 py-2 border border-gray-700 bg-gray-800 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all duration-200"
-                  placeholder="Enter your email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
-            )}
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-1">
-                Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                required
-                className="appearance-none rounded-lg relative block w-full px-3 py-2 border border-gray-700 bg-gray-800 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all duration-200"
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                minLength={isSuperuser ? 0 : 6}
-              />
-            </div>
-            {isSignUp && (
-              <div>
-                <label htmlFor="chess-username" className="block text-sm font-medium text-gray-300 mb-1">
-                  Chess.com Username
-                </label>
-                <input
-                  id="chess-username"
-                  name="chess-username"
-                  type="text"
-                  required={isSignUp}
-                  className="appearance-none rounded-lg relative block w-full px-3 py-2 border border-gray-700 bg-gray-800 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all duration-200"
-                  placeholder="Your Chess.com username"
-                  value={chessUsername}
-                  onChange={(e) => setChessUsername(e.target.value)}
-                />
-              </div>
+              <>
+                <div>
+                  <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1">
+                    Email
+                  </label>
+                  <input
+                    id="email"
+                    name="email"
+                    type="email"
+                    required={!isSuperuser}
+                    className="appearance-none rounded-lg relative block w-full px-3 py-2 border border-gray-700 bg-gray-800 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all duration-200"
+                    placeholder="Enter your email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-1">
+                    Password
+                  </label>
+                  <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    required={!isSuperuser}
+                    minLength={6}
+                    className="appearance-none rounded-lg relative block w-full px-3 py-2 border border-gray-700 bg-gray-800 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all duration-200"
+                    placeholder="Enter your password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </div>
+
+                {isSignUp && (
+                  <div>
+                    <label htmlFor="chess-username" className="block text-sm font-medium text-gray-300 mb-1">
+                      Chess.com Username (Optional)
+                    </label>
+                    <input
+                      id="chess-username"
+                      name="chess-username"
+                      type="text"
+                      className="appearance-none rounded-lg relative block w-full px-3 py-2 border border-gray-700 bg-gray-800 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all duration-200"
+                      placeholder="Your Chess.com username"
+                      value={chessUsername}
+                      onChange={(e) => setChessUsername(e.target.value)}
+                    />
+                  </div>
+                )}
+              </>
             )}
           </div>
 
