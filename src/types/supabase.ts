@@ -22,6 +22,13 @@ export interface Database {
           password: string
           chess_username: string
         }
+        Update: {
+          id?: string
+          email?: string
+          password?: string
+          chess_username?: string
+          updated_at?: string
+        }
       }
       polls: {
         Row: {
@@ -38,6 +45,13 @@ export interface Database {
           votes?: Record<string, number>
           active?: boolean
         }
+        Update: {
+          id?: number
+          question?: string
+          options?: Record<string, string>
+          votes?: Record<string, number>
+          active?: boolean
+        }
       }
       visits: {
         Row: {
@@ -48,7 +62,24 @@ export interface Database {
         Insert: {
           auth_id?: string
         }
+        Update: {
+          id?: string
+          auth_id?: string | null
+        }
       }
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      [_ in never]: never
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
     }
   }
 }
+

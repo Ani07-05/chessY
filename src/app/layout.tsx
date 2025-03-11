@@ -1,38 +1,32 @@
-// app/layout.tsx
-import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import "./globals.css";
-import { ThemeProvider } from "@/components/theme-provider";
-import SupabaseProvider from "@/components/SupabaseProvider";
-import { Toaster } from "sonner";
+import type React from "react"
+import "./globals.css"
+import "./chess-styles.css"
+import { Inter, Playfair_Display } from "next/font/google"
+import { ThemeProvider } from "@/components/theme-provider"
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-sans",
+})
 
-export const metadata: Metadata = {
-  title: "Chess ERP",
-  description: "Chess Education and Rating Platform",
-};
+const playfair = Playfair_Display({
+  subsets: ["latin"],
+  variable: "--font-serif",
+})
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode;
+  children: React.ReactNode
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className={inter.className}>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="system"
-          enableSystem
-          disableTransitionOnChange
-        >
-          <SupabaseProvider>
-            {children}
-          </SupabaseProvider>
-          <Toaster richColors closeButton position="top-right" />
+    <html lang="en">
+      <body className={`${inter.variable} ${playfair.variable} font-sans`}>
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
+          {children}
         </ThemeProvider>
       </body>
     </html>
-  );
+  )
 }
+
