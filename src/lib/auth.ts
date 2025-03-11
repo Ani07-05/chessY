@@ -29,7 +29,7 @@ export async function createUser(userData: {
     }
 
     // Then add the user details to your users table
-    const { data: profileData, error: profileError } = await supabase
+    const {  error: profileError } = await supabase
       .from('users')
       .insert([
         {

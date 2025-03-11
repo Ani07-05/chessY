@@ -1,5 +1,5 @@
 declare module 'react-chartjs-2' {
-  import { ChartComponent, ChartData, ChartOptions } from 'chart.js';
+  import { ChartData, ChartOptions } from 'chart.js';
   
   export interface ChartComponentProps {
     data: ChartData;

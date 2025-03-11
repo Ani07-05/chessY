@@ -1,12 +1,13 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Chart as ChartJS } from "chart.js/auto"
 import { Line, Pie, Bar } from "react-chartjs-2"
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
 import { useRouter } from "next/navigation"
-import { ChevronDown, ChevronUp, Clock, ExternalLink, Play, RefreshCw, Trophy, Users } from "lucide-react"
+import { ChevronDown, ChevronUp, Clock, ExternalLink, Play, RefreshCw, Trophy, Users } from 'lucide-react'
 import { useTheme } from "next-themes"
+import Image from "next/image"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
@@ -62,13 +63,7 @@ interface UserProfile {
   email?: string
 }
 
-interface PollNotification {
-  id: string
-  poll_id: string
-  message: string
-  read: boolean
-  created_at: string
-}
+
 
 interface Poll {
   id: string
@@ -78,6 +73,22 @@ interface Poll {
   active: boolean
   created_at: string
   type?: "regular" | "quiz"
+}
+
+interface GameData {
+  playerColor: string
+  opponentColor: string
+  opponentUsername: string
+  result: string
+  resultText: string
+  resultClass: string
+  date: string
+  time: string
+  timeControl: string
+  url: string
+  white: { username: string; result: string }
+  black: { username: string; result: string }
+  end_time: number
 }
 
 export default function Dashboard() {
@@ -91,11 +102,10 @@ export default function Dashboard() {
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const [classProgress, setClassProgress] = useState<ClassProgress | null>(null)
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
-  const [recentGames, setRecentGames] = useState<any[]>([])
+  const [recentGames, setRecentGames] = useState<GameData[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [activeTab, setActiveTab] = useState("overview")
   const [videoPreviewUrl, setVideoPreviewUrl] = useState("")
-  const [notifications, setNotifications] = useState<PollNotification[]>([])
   const [activePolls, setActivePolls] = useState<Poll[]>([])
   const [hasVoted, setHasVoted] = useState<Record<string, boolean>>({})
 
@@ -123,7 +133,7 @@ export default function Dashboard() {
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24))
   }
 
-  const fetchUserProfile = async () => {
+  const fetchUserProfile = useCallback(async () => {
     try {
       const {
         data: { session },
@@ -189,7 +199,7 @@ export default function Dashboard() {
       console.error("Error fetching user profile:", err)
       setError(err instanceof Error ? err.message : "Failed to load user profile")
     }
-  }
+  }, [router, supabase])
 
   const fetchGameArchives = async (username: string): Promise<string[]> => {
     const response = await fetch(`https://api.chess.com/pub/player/${username}/games/archives`)
@@ -198,14 +208,14 @@ export default function Dashboard() {
     return data.archives
   }
 
-  const fetchGamesForMonth = async (archiveUrl: string): Promise<any[]> => {
+  const fetchGamesForMonth = async (archiveUrl: string): Promise<GameData[]> => {
     const response = await fetch(archiveUrl)
     if (!response.ok) throw new Error("Failed to fetch monthly games")
     const data = await response.json()
     return data.games || []
   }
 
-  const fetchRecentGames = async (username: string) => {
+  const fetchRecentGames = useCallback(async (username: string) => {
     try {
       const archives = await fetchGameArchives(username)
       if (archives.length === 0) return []
@@ -215,10 +225,10 @@ export default function Dashboard() {
       const games = await fetchGamesForMonth(latestArchiveUrl)
 
       // Sort by end time (most recent first) and take the 5 most recent games
-      const sortedGames = games.sort((a: any, b: any) => b.end_time - a.end_time).slice(0, 5)
+      const sortedGames = games.sort((a: GameData, b: GameData) => b.end_time - a.end_time).slice(0, 5)
 
       // Process games to add result information
-      const processedGames = sortedGames.map((game: any) => {
+      const processedGames = sortedGames.map((game: GameData) => {
         const playerColor = game.white.username.toLowerCase() === username.toLowerCase() ? "white" : "black"
         const opponentColor = playerColor === "white" ? "black" : "white"
         const result = game[playerColor].result
@@ -233,7 +243,6 @@ export default function Dashboard() {
           resultClass: result === "win" ? "text-green-500" : result === "draw" ? "text-yellow-500" : "text-red-500",
           date: new Date(game.end_time * 1000).toLocaleDateString(),
           time: new Date(game.end_time * 1000).toLocaleTimeString(),
-          timeControl: game.time_control,
           url: game.url,
         }
       })
@@ -242,9 +251,9 @@ export default function Dashboard() {
     } catch (err) {
       console.error("Error fetching recent games:", err)
     }
-  }
+  }, [])
 
-  const fetchClassProgress = async () => {
+  const fetchClassProgress = useCallback(async () => {
     try {
       if (!username) return
 
@@ -294,7 +303,7 @@ export default function Dashboard() {
     } catch (err) {
       console.error("Error fetching class progress:", err)
     }
-  }
+  }, [username])
 
   const refreshData = async () => {
     setRefreshing(true)
@@ -313,7 +322,7 @@ export default function Dashboard() {
     }
   }
 
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     if (!username) return
 
     setLoading(true)
@@ -323,12 +332,12 @@ export default function Dashboard() {
       if (!response.ok) throw new Error("Failed to fetch stats")
       const data = await response.json()
       setStats(data)
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch stats")
     } finally {
       setLoading(false)
     }
-  }
+  }, [username])
 
   const getYouTubeVideoId = (url: string) => {
     const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/
@@ -336,15 +345,14 @@ export default function Dashboard() {
     return match && match[7].length === 11 ? match[7] : false
   }
 
-  const fetchNotifications = async () => {
-    const { data: notifs } = await supabase
+  const fetchNotifications = useCallback(async () => {
+    const {  } = await supabase
       .from("notifications")
       .select("*")
       .eq("read", false)
       .order("created_at", { ascending: false })
 
-    if (notifs) setNotifications(notifs)
-  }
+  }, [supabase])
 
   const handleVote = async (pollId: string, optionKey: string) => {
     try {
@@ -389,7 +397,7 @@ export default function Dashboard() {
     }
   }
 
-  const fetchActivePolls = async () => {
+  const fetchActivePolls = useCallback(async () => {
     try {
       const { data: polls, error } = await supabase
         .from("polls")
@@ -455,7 +463,7 @@ export default function Dashboard() {
     } catch (err) {
       console.error("Error processing polls:", err)
     }
-  }
+  }, [supabase])
 
   useEffect(() => {
     const videoId = getYouTubeVideoId(LATEST_CLASS_URL)
@@ -467,7 +475,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchUserProfile()
-  }, [])
+  }, [fetchUserProfile])
 
   useEffect(() => {
     if (username) {
@@ -475,7 +483,7 @@ export default function Dashboard() {
       fetchClassProgress()
       fetchRecentGames(username)
     }
-  }, [username]) // Removed fetchStats from dependencies
+  }, [username, fetchStats, fetchClassProgress, fetchRecentGames])
 
   useEffect(() => {
     fetchNotifications()
@@ -498,7 +506,7 @@ export default function Dashboard() {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, [fetchNotifications, supabase])
 
   useEffect(() => {
     fetchActivePolls()
@@ -511,7 +519,7 @@ export default function Dashboard() {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, [fetchActivePolls, supabase])
 
   if (loading && !stats) {
     return (
@@ -686,10 +694,12 @@ export default function Dashboard() {
                 >
                   <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent z-10" />
                   {videoPreviewUrl ? (
-                    <img
+                    <Image
                       src={videoPreviewUrl || "/placeholder.svg"}
                       alt="Chess class thumbnail"
                       className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      width={640}
+                      height={360}
                     />
                   ) : (
                     <div className={`w-full h-full ${theme === "dark" ? "chess-pattern-dark" : "chess-pattern-light"}`}>
@@ -709,7 +719,7 @@ export default function Dashboard() {
                           --piece-color: #f1f5f9;
                         }
                       `}</style>
-                      <img src="/chess.svg" alt="Chess pattern" className="w-full h-full object-cover" />
+                      <Image src="/chess.svg" alt="Chess pattern" className="w-full h-full object-cover" width={640} height={360} />
                     </div>
                   )}
                   <div className="absolute inset-0 flex items-center justify-center z-20">
@@ -1018,7 +1028,7 @@ export default function Dashboard() {
                                   </div>
                                   <div>
                                     <div className="text-sm font-medium">Play 5 games</div>
-                                    <div className="text-xs text-muted-foreground">Apply what you've learned</div>
+                                    <div className="text-xs text-muted-foreground">Apply what you&apos;ve learned</div>
                                   </div>
                                 </li>
                                 <li className="flex items-start gap-2">
@@ -1151,7 +1161,7 @@ export default function Dashboard() {
                               {stats?.[typedType]?.best?.rating || "N/A"}
                               {stats?.[typedType]?.best?.date && (
                                 <span className="text-sm font-normal text-muted-foreground ml-2">
-                                  on {new Date(stats?.[typedType]?.best?.date! * 1000).toLocaleDateString()}
+                                  on {new Date(stats?.[typedType]?.best?.date * 1000).toLocaleDateString()}
                                 </span>
                               )}
                             </div>

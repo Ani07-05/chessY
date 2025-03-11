@@ -4,7 +4,7 @@ import type React from "react"
 
 import { useState, useEffect } from "react"
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
-import { useSearchParams, useRouter } from "next/navigation"
+import { useRouter } from "next/navigation"
 
 export default function AuthPage() {
   const router = useRouter()
@@ -17,7 +17,6 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false)
   const [successMessage, setSuccessMessage] = useState("")
   const [showPassword, setShowPassword] = useState(false)
-  const searchParams = useSearchParams()
   const supabase = createClientComponentClient()
 
   // Direct superuser navigation - bypasses potential middleware checks

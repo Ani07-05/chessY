@@ -69,7 +69,7 @@ export default function CreatePoll() {
       }
 
       // Insert the poll
-      const { data, error } = await supabase
+      const {  error } = await supabase
         .from("polls")
         .insert({
           question: question.trim(),

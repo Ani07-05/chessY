@@ -1,7 +1,6 @@
 "use client"
 
 import { Badge } from "@/components/ui/badge"
-
 import { useState, useEffect, useRef } from "react"
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
 import type { Database } from "@/types/supabase"
@@ -74,13 +73,12 @@ export default function StreamPage() {
   const [pollError, setPollError] = useState<string>("")
   const [isAuthorized, setIsAuthorized] = useState<boolean>(false)
   const [password, setPassword] = useState<string>("")
-  const [fetchError, setFetchError] = useState<string>("")
-  const [isLoading, setIsLoading] = useState<boolean>(true)
+  const [, setIsLoading] = useState<boolean>(true)
   const [authType, setAuthType] = useState<"admin" | "user">("admin")
   const [email, setEmail] = useState("")
   const [chessUsername, setChessUsername] = useState("")
   const [activeTab, setActiveTab] = useState("dashboard")
-  const [streamStats, setStreamStats] = useState<StreamStats>({
+  const [, setStreamStats] = useState<StreamStats>({
     totalUsers: 0,
     activePolls: 0,
     totalVotes: 0,
@@ -99,8 +97,9 @@ export default function StreamPage() {
   const supabase = createClientComponentClient<Database>()
 
   // Initialization with useEffect
-  useEffect(() => {
-    if (localStorage.getItem("stream_authorized") === "true") {
+/* eslint-disable react-hooks/exhaustive-deps */
+useEffect(() => {
+  if (localStorage.getItem("stream_authorized") === "true") {
       setIsAuthorized(true)
       setAuthType("admin")
     }
@@ -190,7 +189,6 @@ export default function StreamPage() {
 
   const fetchActivePolls = async () => {
     try {
-      setFetchError("")
 
       const { data, error } = await supabase
         .from("polls")
@@ -262,9 +260,8 @@ export default function StreamPage() {
         activePolls: data?.length || 0,
         totalVotes: data?.reduce((acc, poll) => acc + Object.keys(poll.votes || {}).length, 0) || 0,
       }))
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error details:", err)
-      setFetchError(err.message || "Failed to fetch polls")
       setActivePolls([])
     }
   }
@@ -340,7 +337,7 @@ export default function StreamPage() {
       }
 
       const validOptions = Object.fromEntries(
-        Object.entries(newPoll.options).filter(([_, value]) => value.trim() !== ""),
+        Object.entries(newPoll.options).filter(([, value]) => value.trim() !== ""),
       )
 
       if (Object.keys(validOptions).length < 2) {
@@ -349,7 +346,7 @@ export default function StreamPage() {
         return
       }
 
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from("polls")
         .insert([
           {
@@ -373,10 +370,10 @@ export default function StreamPage() {
       setNewPoll({ question: "", options: { "0": "", "1": "" }, type: "regular" })
       await fetchActivePolls()
       toast.success("Poll created successfully")
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error creating poll:", err)
-      setPollError(err.message || "Failed to create poll")
-      toast.error("Error creating poll: " + err.message)
+      setPollError(err instanceof Error ? err.message : "Failed to create poll")
+      toast.error("Error creating poll: " + (err instanceof Error ? err.message : "An unknown error occurred"))
     } finally {
       setIsCreatingPoll(false)
     }
@@ -402,54 +399,55 @@ export default function StreamPage() {
 
       await fetchActivePolls()
       toast.success("Poll ended successfully")
-    } catch (err: any) {
-      console.error("Error ending poll:", err)
-      setPollError(err.message)
-      toast.error("Error ending poll: " + err.message)
-    }
-  }
-
-  const handleVote = async (pollId: string, optionId: string, userId: string) => {
-    try {
-      // First, get the current poll data
-      const { data: pollData, error: fetchError } = await supabase
-        .from("polls")
-        .select("votes, voters")
-        .eq("id", pollId)
-        .single()
-
-      if (fetchError) throw fetchError
-
-      // Update votes
-      const updatedVotes = { ...(pollData.votes || {}) }
-      updatedVotes[userId] = optionId
-
-      // Update voters with timestamp
-      const updatedVoters = { ...(pollData.voters || {}) }
-      updatedVoters[userId] = {
-        timestamp: Date.now(),
-        option: optionId,
+    } catch (err: unknown) {
+        console.error("Error ending poll:", err)
+        const errorMessage = err instanceof Error ? err.message : "An unknown error occurred"
+        setPollError(errorMessage)
+        toast.error("Error ending poll: " + errorMessage)
       }
-
-      // Save both updates to the database
-      const { error: updateError } = await supabase
-        .from("polls")
-        .update({
-          votes: updatedVotes,
-          voters: updatedVoters,
-        })
-        .eq("id", pollId)
-
-      if (updateError) throw updateError
-
-      // Success handling
-      toast.success("Vote recorded successfully!")
-      await fetchActivePolls() // Refresh the polls
-    } catch (error) {
-      console.error("Error recording vote:", error)
-      toast.error("Failed to record your vote")
-    }
   }
+
+  // const handleVote = async (pollId: string, optionId: string, userId: string) => {
+  //   try {
+  //     // First, get the current poll data
+  //     const { data: pollData, error: fetchError } = await supabase
+  //       .from("polls")
+  //       .select("votes, voters")
+  //       .eq("id", pollId)
+  //       .single()
+
+  //     if (fetchError) throw fetchError
+
+  //     // Update votes
+  //     const updatedVotes = { ...(pollData.votes || {}) }
+  //     updatedVotes[userId] = optionId
+
+  //     // Update voters with timestamp
+  //     const updatedVoters = { ...(pollData.voters || {}) }
+  //     updatedVoters[userId] = {
+  //       timestamp: Date.now(),
+  //       option: optionId,
+  //     }
+
+  //     // Save both updates to the database
+  //     const { error: updateError } = await supabase
+  //       .from("polls")
+  //       .update({
+  //         votes: updatedVotes,
+  //         voters: updatedVoters,
+  //       })
+  //       .eq("id", pollId)
+
+  //     if (updateError) throw updateError
+
+  //     // Success handling
+  //     toast.success("Vote recorded successfully!")
+  //     await fetchActivePolls() // Refresh the polls
+  //   } catch (error) {
+  //     console.error("Error recording vote:", error)
+  //     toast.error("Failed to record your vote")
+  //   }
+  // }
 
   // Authentication Functions
   const handleAuth = async () => {
@@ -526,10 +524,11 @@ export default function StreamPage() {
           localStorage.setItem("user_auth", JSON.stringify(newUser))
           toast.success("Account created successfully")
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Auth error:", err)
-        setPollError(err.message || "An error occurred during authentication")
-        toast.error("Authentication error: " + err.message)
+        const errorMessage = err instanceof Error ? err.message : "An error occurred during authentication"
+        setPollError(errorMessage)
+        toast.error("Authentication error: " + errorMessage)
       }
     }
   }
@@ -559,10 +558,10 @@ export default function StreamPage() {
 
       localStorage.setItem("user_auth", JSON.stringify(data))
       toast.success("Username updated successfully!")
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Chess.com username update error:", err)
-      setPollError(err.message)
-      toast.error("Update error: " + err.message)
+      setPollError(err instanceof Error ? err.message : "An unknown error occurred")
+      toast.error("Update error: " + (err instanceof Error ? err.message : "An unknown error occurred"))
     }
   }
 
@@ -655,7 +654,7 @@ export default function StreamPage() {
       // Create CSV content
       let csvContent = "Voter,Email,Option\n"
 
-      Object.entries(poll.voters || {}).forEach(([_, voter]) => {
+      Object.entries(poll.voters || {}).forEach(([, voter]) => {
         const optionText = poll.options[voter.option] || "Unknown option"
         csvContent += `${voter.name || "Anonymous"},${voter.email || "No email"},${optionText}\n`
       })
@@ -906,7 +905,7 @@ export default function StreamPage() {
                           <Youtube className="h-12 w-12 text-zinc-600 mx-auto mb-4" />
                           <p className="text-zinc-400 mb-2">Ready to start streaming</p>
                           <p className="text-xs text-zinc-500 max-w-md mx-auto mb-4">
-                            When you start streaming, you'll be redirected to YouTube Studio to configure your live
+                            When you start streaming, you will be redirected to YouTube Studio to configure your live
                             stream settings
                           </p>
                         </div>
@@ -1097,14 +1096,14 @@ export default function StreamPage() {
                                           <p className="text-xs text-zinc-400 mb-1">Voters:</p>
                                           <div className="space-y-1 max-h-24 overflow-y-auto pr-2">
                                             {Object.entries(poll.votes || {})
-                                              .filter(([_, vote]) => vote === key)
+                                              .filter(([, vote]) => vote === key)
                                               .sort((a, b) => {
                                                 // Get user data for sorting by time
                                                 const userA = poll.voters?.[a[0]]?.timestamp || 0
                                                 const userB = poll.voters?.[b[0]]?.timestamp || 0
                                                 return userB - userA // Sort by most recent first
                                               })
-                                              .map(async ([voterId, _]) => {
+                                              .map(async ([voterId,]) => {
                                                 // Get user data from users table
                                                 const { data: userData } = await supabase
                                                   .from("users")
@@ -1296,4 +1295,3 @@ export default function StreamPage() {
     </div>
   )
 }
-
