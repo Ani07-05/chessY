@@ -98,6 +98,9 @@ importers:
       sonner:
         specifier: ^2.0.1
         version: 2.0.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      stockfish-web:
+        specifier: ^0.1.0
+        version: 0.1.0
       tailwind-merge:
         specifier: ^3.0.2
         version: 3.0.2
@@ -2739,6 +2742,9 @@ packages:
 
   stable-hash@0.0.4:
     resolution: {integrity: sha512-LjdcbuBeLcdETCrPn9i8AYAZ1eCtu4ECAWtP7UleOiZ9LzVxRzzUZEoZ8zB24nhkQnDWyET0I+3sWokSDS3E7g==}
+
+  stockfish-web@0.1.0:
+    resolution: {integrity: sha512-s7Fimn9hYfDC3G0vybl6lsrBmuEHsPGOFj+tAVnnEhRawEO9MB90xBoVqiceznd5slznNH7/YqkaDD4ft1/VjQ==}
 
   streamsearch@1.1.0:
     resolution: {integrity: sha512-Mcc5wHehp9aXz1ax6bZUyY5afg9u2rv5cqQI3mRrYkGC8rW2hM02jWuwjtL++LS5qinSyhj2QfLyNsuc+VsExg==}
@@ -6143,6 +6149,8 @@ snapshots:
   source-map@0.6.1: {}
 
   stable-hash@0.0.4: {}
+
+  stockfish-web@0.1.0: {}
 
   streamsearch@1.1.0: {}
 

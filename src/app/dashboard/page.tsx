@@ -1,25 +1,24 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { Chart as ChartJS } from "chart.js/auto"
-import { Line, Pie, Bar } from "react-chartjs-2"
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
+import { useCallback, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { ChevronDown, ChevronUp, Clock, ExternalLink, Play, RefreshCw, Trophy, Users } from 'lucide-react'
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
+import { Separator } from "@/components/ui/separator"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Clock, ExternalLink, Play, RefreshCw, Trophy, Users } from "lucide-react"
 import { useTheme } from "next-themes"
 import Image from "next/image"
-
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Progress } from "@/components/ui/progress"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
-import { UserNav } from "@/components/user-nav"
-import { ThemeSwitcher } from "@/components/theme-switcher"
 import { toast } from "sonner"
-import type { Database } from "@/types/supabase"
+import { Chart as ChartJS } from "chart.js/auto"
+import { Line, Pie, Bar } from "react-chartjs-2"
+import { ThemeSwitcher } from "@/components/theme-switcher"
+import { UserNav } from "@/components/user-nav"
+import type { Database } from "@/lib/database"
 
 // Configure chart defaults
 ChartJS.defaults.responsive = true
@@ -63,8 +62,6 @@ interface UserProfile {
   email?: string
 }
 
-
-
 interface Poll {
   id: string
   question: string
@@ -76,6 +73,7 @@ interface Poll {
 }
 
 interface GameData {
+  fen: any
   playerColor: string
   opponentColor: string
   opponentUsername: string
@@ -202,17 +200,28 @@ export default function Dashboard() {
   }, [router, supabase])
 
   const fetchGameArchives = async (username: string): Promise<string[]> => {
-    const response = await fetch(`https://api.chess.com/pub/player/${username}/games/archives`)
-    if (!response.ok) throw new Error("Failed to fetch game archives")
-    const data = await response.json()
-    return data.archives
+    try {
+      const response = await fetch(`https://api.chess.com/pub/player/${username}/games/archives`)
+      if (!response.ok) throw new Error("Failed to fetch game archives")
+      const data = await response.json()
+      return data.archives || []
+    } catch (error) {
+      console.error("Error fetching game archives:", error)
+      toast.error("Could not load game archives")
+      return []
+    }
   }
 
   const fetchGamesForMonth = async (archiveUrl: string): Promise<GameData[]> => {
-    const response = await fetch(archiveUrl)
-    if (!response.ok) throw new Error("Failed to fetch monthly games")
-    const data = await response.json()
-    return data.games || []
+    try {
+      const response = await fetch(archiveUrl)
+      if (!response.ok) throw new Error("Failed to fetch monthly games")
+      const data = await response.json()
+      return data.games || []
+    } catch (error) {
+      console.error("Error fetching monthly games:", error)
+      return []
+    }
   }
 
   const fetchRecentGames = useCallback(async (username: string) => {
@@ -346,27 +355,42 @@ export default function Dashboard() {
   }
 
   const fetchNotifications = useCallback(async () => {
-    const {  } = await supabase
+    const { data } = await supabase
       .from("notifications")
       .select("*")
       .eq("read", false)
       .order("created_at", { ascending: false })
-
+      
+    // Handle the notifications data as needed
+    return data;
   }, [supabase])
 
   const handleVote = async (pollId: string, optionKey: string) => {
     try {
       const {
         data: { session },
+        error: sessionError,
       } = await supabase.auth.getSession()
-      if (!session?.user?.id) {
-        console.error("User not logged in")
+
+      if (sessionError || !session) {
         toast.error("You must be logged in to vote")
         return
       }
 
-      // First, get the current poll state
-      const { data: currentPoll } = await supabase.from("polls").select("votes").eq("id", pollId).single()
+      // Get the current poll
+      const { data: pollData, error: pollError } = await supabase
+        .from("polls")
+        .select("*")
+        .eq("id", pollId)
+        .single()
+
+      if (pollError) {
+        console.error("Error fetching poll:", pollError)
+        toast.error("Failed to fetch poll")
+        return
+      }
+
+      const currentPoll = pollData
 
       if (!currentPoll) {
         console.error("Poll not found")
@@ -464,6 +488,28 @@ export default function Dashboard() {
       console.error("Error processing polls:", err)
     }
   }, [supabase])
+
+  // Handler to start reviewing a game with proper error handling
+// Handler to start reviewing a game with proper error handling
+const handleReviewGame = (game: GameData) => {
+  try {
+    // Extract game ID from URL
+    const gameId = game.url.split('/').pop()
+    
+    if (!gameId) {
+      toast.error("Could not determine game ID")
+      return
+    }
+    
+    // Navigate to review page in same tab with query parameters and username
+    const reviewUrl = `/review?gameId=${gameId}&playerColor=${game.playerColor}&username=${username}`
+    router.push(reviewUrl)
+    toast.success("Loading game review...")
+  } catch (error) {
+    console.error("Error opening game review:", error)
+    toast.error("Failed to open game review")
+  }
+}
 
   useEffect(() => {
     const videoId = getYouTubeVideoId(LATEST_CLASS_URL)
@@ -761,9 +807,31 @@ export default function Dashboard() {
                             <div className="text-3xl font-bold">{stats?.[typedType]?.last.rating || "N/A"}</div>
                             <div className="flex items-center mt-1">
                               {ratingChange.isPositive ? (
-                                <ChevronUp className="h-4 w-4 text-green-500" />
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className="h-4 w-4 text-green-500"
+                                >
+                                  <path d="m18 15-6-6-6 6" />
+                                </svg>
                               ) : (
-                                <ChevronDown className="h-4 w-4 text-red-500" />
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className="h-4 w-4 text-red-500"
+                                >
+                                  <path d="m6 9 6 6 6-6" />
+                                </svg>
                               )}
                               <span className={ratingChange.isPositive ? "text-green-500" : "text-red-500"}>
                                 {ratingChange.value} pts
@@ -1110,15 +1178,24 @@ export default function Dashboard() {
                             </div>
                             <div className="text-sm text-muted-foreground mt-1">Time Control: {game.timeControl}</div>
                           </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="shrink-0"
-                            onClick={() => window.open(game.url, "_blank")}
-                          >
-                            <ExternalLink className="h-4 w-4 mr-2" />
-                            View Game
-                          </Button>
+                          <div className="flex flex-col gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => window.open(game.url, "_blank")}
+                            >
+                              <ExternalLink className="h-4 w-4 mr-2" />
+                              View Game
+                            </Button>
+                            <Button
+                              variant="default"
+                              size="sm"
+                              onClick={() => handleReviewGame(game)}
+                            >
+                              <Play className="h-4 w-4 mr-2" />
+                              Review Game
+                            </Button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1211,6 +1288,7 @@ export default function Dashboard() {
                 })}
               </div>
             </TabsContent>
+
             <TabsContent value="polls" className="space-y-4">
               <Card>
                 <CardHeader>
