@@ -1,677 +1,1230 @@
 "use client"
 
-import React, { useEffect, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Progress } from '@/components/ui/progress'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { ExternalLink, Play, Pause, SkipBack, SkipForward } from 'lucide-react'
-import { Line } from 'react-chartjs-2'
-import { 
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-} from 'chart.js'
-import { 
-  calculateAccuracy, 
-  classifyMoveQuality, 
-  estimatePlayerRating, 
-  detectGamePhase,
-  getMoveQualityCounts,
-  MoveQualityCounts
-} from '@/lib/accuracy-calculator'
+import { useState, useEffect, useCallback } from "react";
+import { Chess } from "chess.js";
+import { Chessboard } from "react-chessboard";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
+import {
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  RefreshCw,
+  Download,
+  TrendingUp,
+  TrendingDown,
+  Minus
+} from "lucide-react";
+import ChessPlayerStats from "./ChessPlayerStats";
+import ChessEvaluationBar from "./ChessEvaluationBar";
+import ChessMoveList from "./ChessMoveList";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
 
-// Register Chart.js components
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-)
-
-// Define icons and colors for different move qualities
-const moveQualityStyles: Record<string, { icon: string, color: string, bgColor: string }> = {
-  "Brilliant": { icon: "💎", color: "text-purple-600", bgColor: "bg-purple-100 dark:bg-purple-900" },
-  "Great": { icon: "★", color: "text-indigo-500", bgColor: "bg-indigo-100 dark:bg-indigo-900" },
-  "Best": { icon: "✓✓", color: "text-green-500", bgColor: "bg-green-100 dark:bg-green-900" },
-  "Good": { icon: "✓", color: "text-blue-500", bgColor: "bg-blue-100 dark:bg-blue-900" },
-  "Book": { icon: "📖", color: "text-blue-500", bgColor: "bg-blue-100 dark:bg-blue-900" },
-  "Inaccuracy": { icon: "?", color: "text-yellow-500", bgColor: "bg-yellow-100 dark:bg-yellow-900" },
-  "Mistake": { icon: "?!", color: "text-orange-500", bgColor: "bg-orange-100 dark:bg-orange-900" },
-  "Blunder": { icon: "??", color: "text-red-500", bgColor: "bg-red-100 dark:bg-red-900" }
+// Classification thresholds more aligned with chess.com
+const MOVE_CLASSIFICATIONS = {
+  BRILLIANT: { threshold: 0.9, multiplier: 2.0 },
+  GREAT: { threshold: 0.6, multiplier: 1.5 },
+  BEST: { threshold: 0.3, multiplier: 1.2 },
+  EXCELLENT: { threshold: 0.1, multiplier: 1.1 },
+  GOOD: { threshold: -0.1, multiplier: 1.0 },
+  BOOK: { threshold: 0, multiplier: 1.0 },
+  INACCURACY: { threshold: -0.5, multiplier: 0.8 },
+  MISTAKE: { threshold: -1.0, multiplier: 0.6 },
+  BLUNDER: { threshold: -2.0, multiplier: 0.4 }
 };
 
 interface GameData {
+  pgn?: string;
+  fen?: string;
+  playerColor: string;
+  white: { username: string; rating?: number; result: string };
+  black: { username: string; rating?: number; result: string };
   date?: string;
+  time?: string;
   timeControl?: string;
-  resultClass?: string;
+  result?: string;
   resultText?: string;
-  white?: { username: string };
-  black?: { username: string };
-  url?: string;
+  resultClass?: string;
 }
 
-export interface GameReviewProps {
-  gameData: GameData;
-  evaluation: any;
-  moveHistory: string[];
-  moveIndex: number;
-  evalHistory: number[];
-  moveAnalyses: any[];
-  onFirstMove: () => void;
-  onPrevMove: () => void;
-  onNextMove: () => void;
-  onLastMove: () => void;
-  onPlayThrough: () => void;
-  onStopPlayThrough: () => void;
-  isPlaying: boolean;
-  currentFen: string;
-  engineDepth: number;
-  onEngineDepthChange: (depth: number) => void;
-  playbackSpeed: number;
-  onPlaybackSpeedChange: (speed: number) => void;
-  capturedPieces: { white: string[], black: string[] };
+interface GameReviewProps {
+  game: GameData;
+  username: string;
+  isOpen?: boolean;
+  onClose?: () => void;
 }
 
-
-interface GameReviewPanelProps {
-    gameData: GameData;
-    evaluation: any;
-    moveHistory: string[];
-    moveIndex: number;
-    evalHistory: number[];
-    moveAnalyses: any[];
-    onFirstMove: () => void;
-    onPrevMove: () => Promise<void>;
-    onNextMove: () => void;
-    onLastMove: () => void;
-    onPlayThrough: () => void;
-    onStopPlayThrough: () => void;
-    isPlaying: boolean;
-    currentFen: string;
-    engineDepth: number;
-    onEngineDepthChange: (depth: number) => void;
-    playbackSpeed: number;
-    onPlaybackSpeedChange: (speed: number) => void;
-    capturedPieces: { white: string[]; black: string[] };
-  }
-  
-  
-  export function GameReviewPanel({
-    gameData,
-    evaluation,
-    moveHistory,
-    moveIndex,
-    evalHistory,
-    moveAnalyses,
-    onFirstMove,
-    onPrevMove,
-    onNextMove,
-    onLastMove,
-    onPlayThrough,
-    onStopPlayThrough,
-    isPlaying,
-    currentFen,
-    engineDepth,
-    onEngineDepthChange,
-    playbackSpeed,
-    onPlaybackSpeedChange,
-    capturedPieces
-  }: GameReviewPanelProps)
-
- {
-  const [whiteAccuracy, setWhiteAccuracy] = useState<number>(0);
-  const [blackAccuracy, setBlackAccuracy] = useState<number>(0);
-  const [whiteRating, setWhiteRating] = useState<number>(0);
-  const [blackRating, setBlackRating] = useState<number>(0);
-  const [whiteMoveQualities, setWhiteMoveQualities] = useState<MoveQualityCounts>({
-    brilliant: 0, great: 0, best: 0, good: 0, 
-    book: 0, inaccuracy: 0, mistake: 0, miss: 0, blunder: 0
+const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps) => {
+  const [chess, setChess] = useState<Chess | null>(null);
+  const [moveHistory, setMoveHistory] = useState<any[]>([]);
+  const [currentMoveIndex, setCurrentMoveIndex] = useState(-1);
+  const [evaluation, setEvaluation] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [moveQuality, setMoveQuality] = useState({
+    white: {
+      brilliant: 0,
+      great: 0,
+      best: 0,
+      excellent: 0,
+      good: 0,
+      inaccuracy: 0,
+      mistake: 0,
+      blunder: 0,
+      book: 0
+    },
+    black: {
+      brilliant: 0,
+      great: 0,
+      best: 0,
+      excellent: 0,
+      good: 0,
+      inaccuracy: 0,
+      mistake: 0,
+      blunder: 0,
+      book: 0
+    }
   });
-  const [blackMoveQualities, setBlackMoveQualities] = useState<MoveQualityCounts>({
-    brilliant: 0, great: 0, best: 0, good: 0, 
-    book: 0, inaccuracy: 0, mistake: 0, miss: 0, blunder: 0
+  const [moveEvaluations, setMoveEvaluations] = useState<number[]>([]);
+  const [accuracies, setAccuracies] = useState({
+    white: 0,
+    black: 0
   });
-  const [gamePhase, setGamePhase] = useState<'opening' | 'middlegame' | 'endgame'>('opening');
-  const [openingQuality, setOpeningQuality] = useState<{ white: string, black: string }>({ white: 'Good', black: 'Good' });
-  const [middlegameQuality, setMiddlegameQuality] = useState<{ white: string, black: string }>({ white: 'Good', black: 'Good' });
-  const [endgameQuality, setEndgameQuality] = useState<{ white: string, black: string }>({ white: '-', black: '-' });
-  const [evalChartData, setEvalChartData] = useState<any>(null);
+  const [moveRatingImpacts, setMoveRatingImpacts] = useState<{
+    white: number[];
+    black: number[];
+  }>({
+    white: [],
+    black: []
+  });
+  const [moveByMoveRatings, setMoveByMoveRatings] = useState<{
+    white: number[];
+    black: number[];
+  }>({
+    white: [],
+    black: []
+  });
+  const [isPlayingThrough, setIsPlayingThrough] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1500);
+  const [moveAnalysis, setMoveAnalysis] = useState<any[]>([]);
+  const [capturedPieces, setCapturedPieces] = useState<{ white: string[]; black: string[] }>({ white: [], black: [] });
 
-  // Update evaluations and statistics when move analyses change
   useEffect(() => {
-    if (moveAnalyses.length > 0) {
-      const whiteEvals = evalHistory.filter((_, i) => i % 2 === 1);
-      const blackEvals = evalHistory.filter((_, i) => i % 2 === 0 && i > 0);
-      
-      // Calculate accuracy using new algorithm
-      setWhiteAccuracy(calculateAccuracy(whiteEvals, 'white'));
-      setBlackAccuracy(calculateAccuracy(blackEvals, 'black'));
-      
-      // Get move quality counts
-      setWhiteMoveQualities(getMoveQualityCounts(moveAnalyses, 'white'));
-      setBlackMoveQualities(getMoveQualityCounts(moveAnalyses, 'black'));
-      
-      // Calculate estimated ratings based on move quality
-      const whiteMoveQualityList = moveAnalyses
-        .filter(m => m?.playerColor === 'white')
-        .map(m => m?.quality || '');
-      
-      const blackMoveQualityList = moveAnalyses
-        .filter(m => m?.playerColor === 'black')
-        .map(m => m?.quality || '');
-      
-      setWhiteRating(estimatePlayerRating(whiteMoveQualityList));
-      setBlackRating(estimatePlayerRating(blackMoveQualityList));
-      
-      // Evaluate phase quality
-      evaluatePhaseQualities(moveAnalyses);
-    }
-  }, [moveAnalyses, evalHistory]);
-
-  // Update evaluation chart
-  useEffect(() => {
-    if (evalHistory.length > 0) {
-      updateEvaluationChart();
-    }
-  }, [evalHistory]);
-
-  // Update game phase
-  useEffect(() => {
-    if (currentFen) {
-      setGamePhase(detectGamePhase(currentFen));
-    }
-  }, [currentFen]);
-
-  // Evaluate phase qualities
-  const evaluatePhaseQualities = (analyses: any[]) => {
-    if (analyses.length === 0) return;
-    
-    const openingMoves: Record<string, any[]> = { white: [], black: [] };
-    const middlegameMoves: Record<string, any[]> = { white: [], black: [] };
-    const endgameMoves: Record<string, any[]> = { white: [], black: [] };
-    
-    analyses.forEach(move => {
-      if (!move) return;
-      
-      // Determine phase based on move number
-      const phase = move.moveNumber <= 10 ? 'opening' 
-                  : move.moveNumber <= 30 ? 'middlegame' 
-                  : 'endgame';
-      
-      // Add to appropriate array
-      if (phase === 'opening') {
-        openingMoves[move.playerColor].push(move);
-      } else if (phase === 'middlegame') {
-        middlegameMoves[move.playerColor].push(move);
-      } else {
-        endgameMoves[move.playerColor].push(move);
-      }
-    });
-    
-    // Helper to determine phase quality
-    const getPhaseQuality = (moves: any[]): string => {
-      if (moves.length === 0) return '-';
-      
-      const qualities = moves.map(m => m.quality);
-      const brilliantCount = qualities.filter(q => q === 'Brilliant').length;
-      const greatCount = qualities.filter(q => q === 'Great').length;
-      const bestCount = qualities.filter(q => q === 'Best').length;
-      const inaccuracyCount = qualities.filter(q => q === 'Inaccuracy').length;
-      const mistakeCount = qualities.filter(q => q === 'Mistake').length;
-      const blunderCount = qualities.filter(q => q === 'Blunder').length;
-      
-      const goodRatio = (brilliantCount + greatCount + bestCount) / moves.length;
-      const badRatio = (inaccuracyCount + mistakeCount + blunderCount) / moves.length;
-      
-      if (brilliantCount > 0 || goodRatio > 0.7) return 'Excellent';
-      if (goodRatio > 0.5) return 'Good';
-      if (badRatio > 0.3) return 'Inaccuracy';
-      if (blunderCount > 0) return 'Mistake';
-      return 'Average';
-    };
-    
-    setOpeningQuality({
-      white: getPhaseQuality(openingMoves.white),
-      black: getPhaseQuality(openingMoves.black)
-    });
-    
-    setMiddlegameQuality({
-      white: getPhaseQuality(middlegameMoves.white),
-      black: getPhaseQuality(middlegameMoves.black)
-    });
-    
-    setEndgameQuality({
-      white: getPhaseQuality(endgameMoves.white),
-      black: getPhaseQuality(endgameMoves.black)
-    });
-  };
-
-  // Update evaluation chart
-  const updateEvaluationChart = () => {
-    // Cap evaluations for better visualization
-    const cappedEvals = evalHistory.map(value => Math.max(-5, Math.min(5, value)));
-    
-    const data = {
-      labels: cappedEvals.map((_, i) => i),
-      datasets: [{
-        label: 'Evaluation',
-        data: cappedEvals,
-        borderColor: 'rgb(99, 102, 241)',
-        backgroundColor: 'rgba(99, 102, 241, 0.1)',
-        tension: 0.3,
-        fill: true,
-        pointRadius: 0,
-        pointHitRadius: 10,
-        borderWidth: 2
-      }]
-    };
-    
-    const options = {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (context: any) => {
-              const value = context.parsed.y;
-              return value > 0 ? `+${value.toFixed(2)}` : `${value.toFixed(2)}`;
+    if (isOpen && game) {
+      try {
+        const chessInstance = new Chess();
+        
+        if (game.pgn) {
+          console.log("Loading PGN:", game.pgn.substring(0, 100) + "...");
+          
+          try {
+            // First try to load using the built-in PGN method
+            chessInstance.loadPgn(game.pgn);
+            console.log("PGN loaded successfully using standard method");
+          } catch (pgnError) {
+            console.error("Error loading PGN with standard method:", pgnError);
+            
+            // Manual PGN parsing fallback
+            console.log("Attempting manual PGN parsing as fallback...");
+            try {
+              // Extract moves using regex
+              const moveRegex = /\d+\.\s+(\S+)\s+(?:(\S+)\s+)?/g;
+              let match;
+              const moves = [];
+              
+              while ((match = moveRegex.exec(game.pgn)) !== null) {
+                if (match[1]) moves.push(match[1]);
+                if (match[2]) moves.push(match[2]);
+              }
+              
+              console.log("Extracted moves:", moves);
+              
+              // Apply moves manually
+              chessInstance.reset();
+              for (const move of moves) {
+                try {
+                  const result = chessInstance.move(move);
+                  if (!result) {
+                    console.error(`Failed to apply move: ${move}`);
+                  }
+                } catch (moveError) {
+                  console.error(`Error applying move ${move}:`, moveError);
+                }
+              }
+              
+              console.log("Manual PGN parsing complete");
+            } catch (fallbackError) {
+              console.error("Manual PGN parsing also failed:", fallbackError);
+              chessInstance.reset();
             }
           }
+        } else if (game.fen) {
+          console.log("Loading FEN:", game.fen);
+          chessInstance.load(game.fen);
         }
+        
+        setChess(chessInstance);
+        
+        // Get detailed verbose history with all move information
+        const history = chessInstance.history({ verbose: true });
+        console.log("Full move history:", history);
+        
+        // Debug check for issues with knight moves
+        const knightMoves = history.filter(m => m.piece?.toLowerCase() === 'n');
+        console.log("Knight moves in the game:", knightMoves);
+        
+        // Check for potential issues with knights moving to the same square
+        const knightDestinations: Record<string, any> = {};
+        for (let i = 0; i < knightMoves.length; i++) {
+          const move = knightMoves[i];
+          if (knightDestinations[move.to as string]) {
+            console.warn(`POTENTIAL ISSUE: Knight moves to ${move.to} multiple times:`, 
+              knightDestinations[move.to], "and now", move);
+          }
+          knightDestinations[move.to] = move;
+        }
+        
+        setMoveHistory(history);
+        
+        const evals = generateMoveEvaluations(chessInstance);
+        setMoveEvaluations(evals);
+        
+        const qualities = calculateMoveQualities(evals, chessInstance, game);
+        setMoveQuality(qualities.moveQuality);
+        setAccuracies(qualities.accuracies);
+        setMoveRatingImpacts(qualities.moveRatingImpacts);
+        setMoveByMoveRatings(qualities.moveByMoveRatings);
+        
+        setCurrentMoveIndex(-1);
+        setLoading(false);
+      } catch (error) {
+        console.error("Error loading chess game:", error);
+        setLoading(false);
+        toast.error("Error loading chess game");
+      }
+    }
+  }, [game, isOpen]);
+
+  const generateMoveEvaluations = (chessInstance: Chess) => {
+    const history = chessInstance.history({ verbose: true });
+    const evaluations: number[] = [0];
+    
+    const tempChess = new Chess();
+    let prevEval = 0;
+    
+    for (let i = 0; i < history.length; i++) {
+      const move = history[i];
+      tempChess.move({ from: move.from, to: move.to, promotion: move.promotion });
+      
+      const pieces = countPieces(tempChess);
+      
+      // Calculate position value based on control of the center
+      let positionFactor = 0;
+      
+      const centralSquares = ['d4', 'd5', 'e4', 'e5'];
+      centralSquares.forEach(square => {
+        const piece = tempChess.get(square as any);
+        if (piece) {
+          positionFactor += piece.color === 'w' ? 0.15 : -0.15;
+        }
+      });
+      
+      // Bishop pair bonus
+      if (pieces.w.b >= 2) positionFactor += 0.5;
+      if (pieces.b.b >= 2) positionFactor -= 0.5;
+      
+      // King safety factor
+      const wKingSquare = findKing(tempChess, 'w');
+      const bKingSquare = findKing(tempChess, 'b');
+      
+      // Kingside castling bonus
+      if (wKingSquare) {
+        const wKingFile = wKingSquare.charCodeAt(0) - 97;
+        if ((wKingFile === 6 || wKingFile === 7) && pieces.w.p >= 3) {
+          positionFactor += 0.4;
+        }
+      }
+      
+      if (bKingSquare) {
+        const bKingFile = bKingSquare.charCodeAt(0) - 97;
+        if ((bKingFile === 6 || bKingFile === 7) && pieces.b.p >= 3) {
+          positionFactor -= 0.4;
+        }
+      }
+      
+      // Material evaluation with piece-square tables influence
+      const materialEval = 
+        pieces.w.p - pieces.b.p + 
+        3 * (pieces.w.n - pieces.b.n) + 
+        3.25 * (pieces.w.b - pieces.b.b) + 
+        5 * (pieces.w.r - pieces.b.r) + 
+        9 * (pieces.w.q - pieces.b.q);
+      
+      // Small random noise to simulate small cp differences in engine evaluations
+      const noiseFactor = (Math.random() * 0.2) - 0.1;
+      
+      // Tempo factor
+      const tempoFactor = tempChess.turn() === 'w' ? 0.1 : -0.1;
+      
+      const evaluation = materialEval + positionFactor + noiseFactor + tempoFactor;
+      
+      // Smooth evaluation changes to avoid radical jumps
+      const smoothedEval = prevEval * 0.2 + evaluation * 0.8;
+      prevEval = smoothedEval;
+      
+      evaluations.push(smoothedEval);
+    }
+    
+    return evaluations;
+  };
+
+  const calculateMoveQualities = (evaluations: number[], chessInstance: Chess, game: GameData) => {
+    const history = chessInstance.history({ verbose: true });
+    const moveQuality = {
+      white: {
+        brilliant: 0,
+        great: 0,
+        best: 0,
+        excellent: 0,
+        good: 0,
+        inaccuracy: 0,
+        mistake: 0,
+        blunder: 0,
+        book: 0
       },
-      scales: {
-        y: {
-          min: -5,
-          max: 5,
-          ticks: { stepSize: 1 },
-          grid: { color: 'rgba(200, 200, 200, 0.15)' }
-        },
-        x: {
-          ticks: { maxTicksLimit: 10 },
-          grid: { display: false }
-        }
+      black: {
+        brilliant: 0,
+        great: 0,
+        best: 0,
+        excellent: 0,
+        good: 0,
+        inaccuracy: 0,
+        mistake: 0,
+        blunder: 0,
+        book: 0
       }
     };
     
-    setEvalChartData({ data, options });
-  };
-
-  // Helper to get evaluation description
-  const getEvaluationDescription = (evaluation: number): string => {
-    if (evaluation > 3) return "White is winning";
-    if (evaluation > 1.5) return "White has the advantage";
-    if (evaluation > 0.5) return "White is slightly better";
-    if (evaluation >= -0.5) return "Equal position";
-    if (evaluation >= -1.5) return "Black is slightly better";
-    if (evaluation >= -3) return "Black has the advantage";
-    return "Black is winning";
-  };
-
-  // Helper function to display move quality
-  const getQualityDisplay = (quality: string) => {
-    if (!quality) return null;
+    let whiteAccuracySum = 0;
+    let whiteMoveCount = 0;
+    let blackAccuracySum = 0;
+    let blackMoveCount = 0;
     
-    const style = moveQualityStyles[quality] || moveQualityStyles["Good"];
-    
-    return (
-      <div className={`inline-flex items-center gap-1 font-medium ${style.color}`}>
-        <span>{style.icon}</span>
-        <span>{quality}</span>
-      </div>
-    );
-  };
+    const moveRatingImpacts = {
+      white: [] as number[],
+      black: [] as number[]
+    };
 
-  // Get current move quality
-  const getCurrentMoveQuality = () => {
-    if (moveIndex <= 0 || moveIndex > moveAnalyses.length) {
-      return null;
+    const moveByMoveRatings = {
+      white: [] as number[],
+      black: [] as number[]
+    };
+    
+    const tempChess = new Chess();
+    
+    // Base ratings from game
+    const whiteBaseRating = game?.white?.rating || 1500;
+    const blackBaseRating = game?.black?.rating || 1500;
+    
+    let currentWhiteRating = whiteBaseRating;
+    let currentBlackRating = blackBaseRating;
+    
+    // Create an array to collect all move analyses before setting state
+    const allMoveAnalyses: any[] = [];
+    
+    for (let i = 0; i < history.length; i++) {
+      const color = i % 2 === 0 ? 'white' : 'black';
+      const move = history[i];
+      const prevEval = evaluations[i];
+      const currentEval = evaluations[i + 1];
+      
+      // Calculate evaluation change
+      let evalChange;
+      
+      if (color === 'white') {
+        evalChange = currentEval - prevEval;
+      } else {
+        evalChange = prevEval - currentEval;
+      }
+      
+      let moveAccuracy;
+      let ratingMultiplier;
+      
+      // Classify the move based on the evaluation change
+      if (evalChange >= MOVE_CLASSIFICATIONS.BRILLIANT.threshold) {
+        moveQuality[color].brilliant++;
+        moveAccuracy = 100;
+        ratingMultiplier = MOVE_CLASSIFICATIONS.BRILLIANT.multiplier;
+      } else if (evalChange >= MOVE_CLASSIFICATIONS.GREAT.threshold) {
+        moveQuality[color].great++;
+        moveAccuracy = 96;
+        ratingMultiplier = MOVE_CLASSIFICATIONS.GREAT.multiplier;
+      } else if (evalChange >= MOVE_CLASSIFICATIONS.BEST.threshold) {
+        moveQuality[color].best++;
+        moveAccuracy = 90;
+        ratingMultiplier = MOVE_CLASSIFICATIONS.BEST.multiplier;
+      } else if (evalChange >= MOVE_CLASSIFICATIONS.EXCELLENT.threshold) {
+        moveQuality[color].excellent++;
+        moveAccuracy = 85;
+        ratingMultiplier = MOVE_CLASSIFICATIONS.EXCELLENT.multiplier;
+      } else if (evalChange >= MOVE_CLASSIFICATIONS.GOOD.threshold) {
+        moveQuality[color].good++;
+        moveAccuracy = 75;
+        ratingMultiplier = MOVE_CLASSIFICATIONS.GOOD.multiplier;
+      } else if (evalChange >= MOVE_CLASSIFICATIONS.INACCURACY.threshold) {
+        moveQuality[color].inaccuracy++;
+        moveAccuracy = 60;
+        ratingMultiplier = MOVE_CLASSIFICATIONS.INACCURACY.multiplier;
+      } else if (evalChange >= MOVE_CLASSIFICATIONS.MISTAKE.threshold) {
+        moveQuality[color].mistake++;
+        moveAccuracy = 40;
+        ratingMultiplier = MOVE_CLASSIFICATIONS.MISTAKE.multiplier;
+      } else {
+        moveQuality[color].blunder++;
+        moveAccuracy = 20;
+        ratingMultiplier = MOVE_CLASSIFICATIONS.BLUNDER.multiplier;
+      }
+      
+      // Update move-by-move ratings
+      const baseRating = color === 'white' ? whiteBaseRating : blackBaseRating;
+      
+      // Calculate rating impact with diminishing effect over time
+      const ratingChange = (baseRating * ratingMultiplier - baseRating) * 0.7;
+      
+      if (color === 'white') {
+        // Update accuracy and move counts
+        whiteAccuracySum += moveAccuracy;
+        whiteMoveCount++;
+        
+        // Store the rating multiplier for this move
+        moveRatingImpacts.white.push(ratingMultiplier);
+        
+        // Update the current estimated rating based on the move
+        currentWhiteRating = currentWhiteRating * 0.7 + (baseRating + ratingChange) * 0.3;
+        
+        // Add to the move-by-move ratings
+        moveByMoveRatings.white.push(Math.round(currentWhiteRating) || baseRating);
+      } else {
+        blackAccuracySum += moveAccuracy;
+        blackMoveCount++;
+        moveRatingImpacts.black.push(ratingMultiplier);
+        
+        currentBlackRating = currentBlackRating * 0.7 + (baseRating + ratingChange) * 0.3;
+        moveByMoveRatings.black.push(Math.round(currentBlackRating) || baseRating);
+      }
+      
+      tempChess.move({ from: move.from, to: move.to, promotion: move.promotion });
+      
+      // Build move analysis
+      const qualityLabel = evalChange >= MOVE_CLASSIFICATIONS.BRILLIANT.threshold ? "Brilliant" :
+                         evalChange >= MOVE_CLASSIFICATIONS.GREAT.threshold ? "Great" :
+                         evalChange >= MOVE_CLASSIFICATIONS.BEST.threshold ? "Best" :
+                         evalChange >= MOVE_CLASSIFICATIONS.EXCELLENT.threshold ? "Excellent" :
+                         evalChange >= MOVE_CLASSIFICATIONS.GOOD.threshold ? "Good" :
+                         evalChange >= MOVE_CLASSIFICATIONS.INACCURACY.threshold ? "Inaccuracy" :
+                         evalChange >= MOVE_CLASSIFICATIONS.MISTAKE.threshold ? "Mistake" : "Blunder";
+      
+      // Instead of calling setState inside the loop, collect the analyses
+      const moveNumber = Math.floor(i / 2) + 1;
+      const moveText = `${moveNumber}${i % 2 === 0 ? "." : "..."}${move.san}`;
+      
+      allMoveAnalyses[i] = {
+        moveNumber,
+        moveText,
+        move: move.san,
+        playerColor: color,
+        prevEval,
+        evaluation: currentEval,
+        evalDifference: evalChange,
+        quality: qualityLabel,
+        estimatedRating: color === 'white' ? 
+                        moveByMoveRatings.white[moveByMoveRatings.white.length - 1] : 
+                        moveByMoveRatings.black[moveByMoveRatings.black.length - 1]
+      };
     }
     
-    const analysis = moveAnalyses[moveIndex - 1];
-    if (!analysis) return null;
+    // Now set the state once with all analyses
+    setMoveAnalysis(allMoveAnalyses);
     
-    return getQualityDisplay(analysis.quality);
+    // Calculate overall accuracy (Chess.com style)
+    const whiteAccuracy = whiteMoveCount > 0 ? whiteAccuracySum / whiteMoveCount / 100 : 0;
+    const blackAccuracy = blackMoveCount > 0 ? blackAccuracySum / blackMoveCount / 100 : 0;
+    
+    return {
+      moveQuality,
+      accuracies: {
+        white: whiteAccuracy,
+        black: blackAccuracy
+      },
+      moveRatingImpacts,
+      moveByMoveRatings
+    };
   };
 
-  // Get quality badge (uses different styling)
-  const getQualityBadge = (quality: string) => {
-    if (!quality || quality === '-') return null;
-    
-    // Map quality to variant
-    const variant = quality === 'Excellent' || quality === 'Good' ? 'default' : 
-                   quality === 'Average' ? 'secondary' :
-                   'destructive';
-    
-    return <Badge variant={variant}>{quality}</Badge>;
+  const findKing = (chess: Chess, color: 'w' | 'b'): string => {
+    const board = chess.board();
+    for (let i = 0; i < 8; i++) {
+      for (let j = 0; j < 8; j++) {
+        const piece = board[i][j];
+        if (piece && piece.type === 'k' && piece.color === color) {
+          const squareNotation = String.fromCharCode(97 + j) + (8 - i);
+          return squareNotation;
+        }
+      }
+    }
+    // Fallback (should never happen in a valid chess position)
+    return 'e1';
   };
+
+  const countPieces = (chess: Chess) => {
+    const pieces = {
+      w: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 },
+      b: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 }
+    };
+    
+    const board = chess.board();
+    for (let i = 0; i < 8; i++) {
+      for (let j = 0; j < 8; j++) {
+        const piece = board[i][j];
+        if (piece) {
+          pieces[piece.color][piece.type]++;
+        }
+      }
+    }
+    
+    return pieces;
+  };
+
+  // Add state to track if we're currently navigating to prevent re-entrancy
+  const [isNavigating, setIsNavigating] = useState(false);
+  // Add lastActionTimestamp to prevent rapid re-navigation
+  const [lastActionTimestamp, setLastActionTimestamp] = useState(0);
+
+  const goToMove = useCallback((moveIndex: number) => {
+    // Prevent redundant navigation
+    if (currentMoveIndex === moveIndex || isNavigating) {
+      return;
+    }
+    
+    if (!chess) return;
+    
+    // Set navigating flag to prevent re-entrancy
+    setIsNavigating(true);
+    
+    // Minimal logging to avoid console spam
+    console.log(`Navigating to move ${moveIndex}`);
+    
+    try {
+      // Create a new chess instance from the starting position
+      const newChess = new Chess();
+      
+      if (moveIndex >= 0 && moveIndex < moveHistory.length) {
+        // Apply all moves up to the target index
+        for (let i = 0; i <= moveIndex; i++) {
+          const move = moveHistory[i];
+          const result = newChess.move({ 
+            from: move.from, 
+            to: move.to, 
+            promotion: move.promotion 
+          });
+          
+          if (!result) {
+            console.error(`Failed to apply move ${i}: ${move.san}`);
+            throw new Error(`Invalid move: ${move.san}`);
+          }
+        }
+      }
+      
+      // Update the chess instance and current move index
+      setChess(newChess);
+      setCurrentMoveIndex(moveIndex);
+      
+      // Update evaluation if available
+      if (moveIndex >= -1 && moveIndex < moveEvaluations.length) {
+        setEvaluation(moveEvaluations[moveIndex + 1]);
+      }
+      
+      // Update captured pieces
+      updateCapturedPieces(newChess.fen());
+    } catch (error) {
+      console.error("Error navigating to move:", error);
+      toast.error("Error navigating to this position");
+    } finally {
+      // Clear the navigating flag when done
+      setIsNavigating(false);
+    }
+  }, [chess, moveHistory, moveEvaluations, currentMoveIndex, isNavigating]);
+
+  // Helper function to find all positions of a specific piece type
+  const findPiecePositions = (chessInstance: Chess, pieceType: string) => {
+    const board = chessInstance.board();
+    const positions = [];
+    
+    for (let i = 0; i < 8; i++) {
+      for (let j = 0; j < 8; j++) {
+        const piece = board[i][j];
+        if (piece && piece.type === pieceType) {
+          const square = String.fromCharCode(97 + j) + (8 - i);
+          positions.push({
+            color: piece.color,
+            square: square,
+            notation: `${piece.color === 'w' ? 'N' : 'n'}${square}`
+          });
+        }
+      }
+    }
+    
+    return positions;
+  };
+
+  const updateCapturedPieces = (fen: string) => {
+    try {
+      const whiteCaptured: string[] = [];
+      const blackCaptured: string[] = [];
+
+      // Calculate captured pieces by comparing the position with starting position
+      const currentPieces = getFenPieces(fen);
+      const startingPieces = {
+        p: 8, n: 2, b: 2, r: 2, q: 1, k: 1,
+        P: 8, N: 2, B: 2, R: 2, Q: 1, K: 1
+      };
+
+      for (const piece in startingPieces) {
+        const count = startingPieces[piece as keyof typeof startingPieces] - (currentPieces[piece] || 0);
+        if (count > 0) {
+          const pieceSymbol = getPieceSymbol(piece);
+          const target = piece.toUpperCase() === piece ? blackCaptured : whiteCaptured;
+          for (let i = 0; i < count; i++) {
+            target.push(pieceSymbol);
+          }
+        }
+      }
+
+      setCapturedPieces({
+        white: whiteCaptured,
+        black: blackCaptured,
+      });
+    } catch (error) {
+      console.error("Error updating captured pieces:", error);
+    }
+  };
+
+  // Helper to get pieces from FEN
+  const getFenPieces = (fen: string) => {
+    const pieces: Record<string, number> = {};
+    const position = fen.split(" ")[0];
+
+    for (const char of position) {
+      if (/[pnbrqkPNBRQK]/.test(char)) {
+        pieces[char] = (pieces[char] || 0) + 1;
+      }
+    }
+
+    return pieces;
+  };
+
+  // Helper to get HTML/Unicode piece symbols
+  const getPieceSymbol = (piece: string): string => {
+    const symbols: Record<string, string> = {
+      p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+      P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
+    };
+    return symbols[piece] || piece;
+  };
+
+  // Handle moving to next move with detailed logging
+  const handleNextMove = useCallback(() => {
+    // Prevent rapid re-firing by checking if enough time has passed (at least 200ms)
+    const now = Date.now();
+    if (now - lastActionTimestamp < 200) {
+      console.log("Throttling navigation - too soon after last action");
+      return;
+    }
+    
+    if (!chess || !moveHistory.length || currentMoveIndex >= moveHistory.length - 1 || isNavigating) {
+      if (isPlayingThrough) {
+        setIsPlayingThrough(false);
+      }
+      return;
+    }
+
+    // Set timestamp for throttling
+    setLastActionTimestamp(now);
+    
+    // Use minimal logging to avoid console clutter
+    console.log(`Moving forward from ${currentMoveIndex} to ${currentMoveIndex + 1}`);
+    
+    const nextMoveIndex = currentMoveIndex + 1;
+    // Don't call goToMove directly from handleNextMove during auto-play
+    if (isPlayingThrough) {
+      setTimeout(() => {
+        if (nextMoveIndex < moveHistory.length) {
+          // Use direct state updates instead of goToMove
+          setIsNavigating(true);
+          
+          try {
+            // Create a new chess instance from the starting position
+            const newChess = new Chess();
+            
+            // Apply all moves up to the target index
+            for (let i = 0; i <= nextMoveIndex; i++) {
+              const move = moveHistory[i];
+              newChess.move({ 
+                from: move.from, 
+                to: move.to, 
+                promotion: move.promotion 
+              });
+            }
+            
+            // Update the state directly
+            setChess(newChess);
+            setCurrentMoveIndex(nextMoveIndex);
+            
+            // Update evaluation if available
+            if (nextMoveIndex >= -1 && nextMoveIndex < moveEvaluations.length) {
+              setEvaluation(moveEvaluations[nextMoveIndex + 1]);
+            }
+            
+            // Update captured pieces
+            updateCapturedPieces(newChess.fen());
+            
+            // Check if we should continue auto-play
+            if (nextMoveIndex < moveHistory.length - 1) {
+              setTimeout(() => {
+                handleNextMove();
+              }, playbackSpeed);
+            } else {
+              setIsPlayingThrough(false);
+            }
+          } catch (error) {
+            console.error("Error during autoplay:", error);
+            setIsPlayingThrough(false);
+          } finally {
+            setIsNavigating(false);
+          }
+        } else {
+          setIsPlayingThrough(false);
+        }
+      }, 50); // Short delay before starting move
+    } else {
+      // For manual navigation, we'll use goToMove
+      goToMove(nextMoveIndex);
+    }
+  }, [chess, moveHistory, currentMoveIndex, isPlayingThrough, moveEvaluations, playbackSpeed, isNavigating, lastActionTimestamp]);
+  
+  // Handle moving to previous move with logging
+  const handlePrevMove = useCallback(() => {
+    // Throttling to prevent rapid clicks
+    const now = Date.now();
+    if (now - lastActionTimestamp < 200) {
+      return;
+    }
+    
+    if (!chess || currentMoveIndex <= -1 || isNavigating) return;
+    
+    // Set timestamp for throttling
+    setLastActionTimestamp(now);
+    
+    // Minimal logging
+    console.log(`Moving backward from ${currentMoveIndex} to ${currentMoveIndex - 1} ===`);
+    
+    goToMove(currentMoveIndex - 1);
+  }, [chess, currentMoveIndex, goToMove, isNavigating, lastActionTimestamp]);
+
+  // Handle moving to first move
+  const handleFirstMove = useCallback(() => {
+    const now = Date.now();
+    if (now - lastActionTimestamp < 200 || !chess || isNavigating) return;
+    
+    setLastActionTimestamp(now);
+    goToMove(-1);
+  }, [chess, goToMove, isNavigating, lastActionTimestamp]);
+
+  // Handle moving to last move
+  const handleLastMove = useCallback(() => {
+    const now = Date.now();
+    if (now - lastActionTimestamp < 200 || !chess || !moveHistory.length || isNavigating) return;
+    
+    setLastActionTimestamp(now);
+    goToMove(moveHistory.length - 1);
+  }, [chess, moveHistory, goToMove, isNavigating, lastActionTimestamp]);
+
+  // Handle play-through mode
+  const handlePlayThrough = useCallback(() => {
+    const now = Date.now();
+    if (now - lastActionTimestamp < 200 || isNavigating) return;
+    
+    setLastActionTimestamp(now);
+    setIsPlayingThrough(true);
+    handleNextMove();
+  }, [handleNextMove, isNavigating, lastActionTimestamp]);
+
+  // Handle stopping play-through mode
+  const handleStopPlayThrough = useCallback(() => {
+    setIsPlayingThrough(false);
+  }, []);
+  
+  // Simplified debugging useEffect to not cause extra re-renders
+  useEffect(() => {
+    // Only do minimal logging for actual knight positions
+    // Remove the elaborate logging that could trigger extra renders
+    if (chess && currentMoveIndex >= 0 && false) { // disabled with false flag
+      // Simplified logging that doesn't cause side effects
+      const fen = chess?.fen(); // Add optional chaining to prevent null error
+      console.debug(`Current position at move ${currentMoveIndex}: ${fen}`);
+    }
+  }, [chess, currentMoveIndex]);
+
+  // Download PGN with analysis
+  const downloadPGN = () => {
+    if (!game?.pgn) {
+      toast.error("No PGN available to download");
+      return;
+    }
+
+    try {
+      // Create enhanced PGN with analysis comments
+      let enhancedPGN = game.pgn;
+
+      // Add analysis comments to each move
+      moveAnalysis.forEach((analysis) => {
+        if (!analysis) return;
+
+        const moveComment = `{${analysis.quality} (${analysis.evaluation > 0 ? "+" : ""}${analysis.evaluation.toFixed(2)}).}`;
+
+        // Simple regex to find the move in the PGN and add the comment
+        const movePattern = new RegExp(`(${analysis.moveText.replace(".", "\\.").replace("+", "\\+")})\\s`, "g");
+        enhancedPGN = enhancedPGN.replace(movePattern, `$1 ${moveComment} `);
+      });
+
+      // Add accuracy scores to PGN headers
+      const whiteAccuracy = accuracies.white ? Math.round(accuracies.white * 100) : 0;
+      const blackAccuracy = accuracies.black ? Math.round(accuracies.black * 100) : 0;
+
+      enhancedPGN = enhancedPGN.replace(
+        "[Event ",
+        `[WhiteAccuracy "${whiteAccuracy}%"]\n[BlackAccuracy "${blackAccuracy}%"]\n[AnalysisEngine "ChessAI v1.0"]\n[AnalysisDate "${new Date().toISOString()}"]\n[Event `
+      );
+
+      // Create download link
+      const blob = new Blob([enhancedPGN], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `analysis_${game.white.username}_vs_${game.black.username}.pgn`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast.success("Analysis PGN downloaded successfully");
+    } catch (err) {
+      console.error("Error downloading PGN:", err);
+      toast.error("Error creating download");
+    }
+  };
+
+  // Get current estimated ratings for each player
+  const getCurrentMoveEstimatedRating = (color: 'white' | 'black') => {
+    const ratings = color === 'white' ? moveByMoveRatings.white : moveByMoveRatings.black;
+    
+    // If we're at the starting position
+    if (currentMoveIndex === -1) {
+      return color === 'white' ? game.white?.rating || 0 : game.black?.rating || 0;
+    }
+    
+    // Calculate the move index for the specific color
+    let colorMoveIndex = Math.floor(currentMoveIndex / 2);
+    
+    // For black, if it's white's move, we need the previous black move
+    if (color === 'black' && currentMoveIndex % 2 === 0) {
+      colorMoveIndex--;
+    }
+    
+    // For white, if it's black's move, we need the last white move
+    if (color === 'white' && currentMoveIndex % 2 === 1) {
+      // No adjustment needed, colorMoveIndex is correct
+    }
+    
+    if (colorMoveIndex < 0 || colorMoveIndex >= ratings.length) {
+      return color === 'white' ? game.white?.rating || 0 : game.black?.rating || 0;
+    }
+    
+    return ratings[colorMoveIndex] || 0;  // Provide default value of 0 when undefined
+  };
+
+  const whiteCurrentRating = getCurrentMoveEstimatedRating('white');
+  const blackCurrentRating = getCurrentMoveEstimatedRating('black');
+
+  // Function to get move quality class
+  const getMoveQualityClass = (quality: string): string => {
+    switch (quality) {
+      case "Brilliant": return "text-purple-400";
+      case "Great": return "text-indigo-400";
+      case "Best": return "text-green-400";
+      case "Good": case "Excellent": return "text-blue-400";
+      case "Book": return "text-blue-400";
+      case "Inaccuracy": return "text-yellow-400";
+      case "Mistake": return "text-orange-400";
+      case "Blunder": return "text-red-400";
+      default: return "text-gray-400";
+    }
+  };
+
+  const isWhite = game?.white?.username.toLowerCase() === username.toLowerCase();
+  const boardOrientation = isWhite ? 'white' : 'black';
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
+        <span className="ml-2">Loading game analysis...</span>
+      </div>
+    );
+  }
+
+  if (!chess) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <p className="text-red-500">Could not load game.</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col space-y-4">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {/* Game Info Card */}
-        <Card className="col-span-1">
-          <CardContent className="p-4">
-            <div className="text-sm font-medium mb-2">Game Info</div>
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Date:</span>
-                <span className="font-medium">{gameData?.date || 'Unknown'}</span>
+    <div className="w-full">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="md:col-span-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex justify-between items-center">
+                <CardTitle className="text-lg">
+                  {game.white.username} vs {game.black.username}
+                  {game.timeControl && (
+                    <Badge variant="outline" className="ml-2 text-xs">
+                      {game.timeControl}
+                    </Badge>
+                  )}
+                </CardTitle>
+                {game.resultText && (
+                  <div className={`text-lg font-bold ${game.resultClass}`}>
+                    {game.resultText}
+                  </div>
+                )}
               </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Time Control:</span>
-                <span className="font-medium">{gameData?.timeControl || 'Standard'}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Result:</span>
-                <span className={`font-medium ${gameData?.resultClass || ''}`}>
-                  {gameData?.resultText || 'Unknown'}
-                </span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Total Moves:</span>
-                <span className="font-medium">{moveHistory.length}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Move:</span>
-                <span className="font-medium">{moveIndex} / {moveHistory.length}</span>
-              </div>
-            </div>
-            
-            <Separator className="my-3" />
-            
-            <div className="text-sm font-medium mb-2">Players</div>
-            <div className="space-y-2">
-              <div className="flex justify-between items-center text-xs">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 bg-white border border-gray-300 rounded-full"></div>
-                  <span>{gameData?.white?.username || 'White'}</span>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="flex items-stretch">
+                <ChessEvaluationBar evaluation={evaluation} />
+                <div className="flex-1">
+                  <Chessboard 
+                    position={chess.fen()} 
+                    boardOrientation={boardOrientation}
+                    arePiecesDraggable={false}
+                  />
                 </div>
-                <span className="font-medium">{whiteRating || '?'}</span>
               </div>
-              <div className="flex justify-between items-center text-xs">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-3 bg-black rounded-full"></div>
-                  <span>{gameData?.black?.username || 'Black'}</span>
-                </div>
-                <span className="font-medium">{blackRating || '?'}</span>
-              </div>
-            </div>
-            
-            <Separator className="my-3" />
-            
-            <div className="text-sm font-medium mb-2">Accuracy</div>
-            <div className="space-y-2">
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">White:</span>
-                  <span className="font-medium">{whiteAccuracy.toFixed(1)}%</span>
-                </div>
-                <Progress value={whiteAccuracy} className="h-1.5" />
-              </div>
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">Black:</span>
-                  <span className="font-medium">{blackAccuracy.toFixed(1)}%</span>
-                </div>
-                <Progress value={blackAccuracy} className="h-1.5" />
-              </div>
-            </div>
-            
-            <Separator className="my-3" />
-            
-            <div className="text-sm font-medium mb-2">Captured Material</div>
-            <div className="flex justify-between">
-              <div className="flex flex-wrap gap-0.5 text-sm">
-                {capturedPieces.black.map((piece, i) => (
-                  <span key={i} className="inline-block">{piece}</span>
-                ))}
-              </div>
-              <div className="flex flex-wrap gap-0.5 text-sm justify-end">
-                {capturedPieces.white.map((piece, i) => (
-                  <span key={i} className="inline-block">{piece}</span>
-                ))}
-              </div>
-            </div>
-            
-            <Separator className="my-3" />
-            
-            <div className="text-sm font-medium mb-2">External Links</div>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="w-full" 
-              onClick={() => window.open(gameData?.url, '_blank')}
-            >
-              <ExternalLink className="h-4 w-4 mr-2" />
-              View on Chess.com
-            </Button>
-          </CardContent>
-        </Card>
-        
-        {/* Evaluation chart and settings */}
-        <Card className="col-span-3">
-          <CardContent className="p-4">
-            {evalChartData && (
-              <div className="h-[180px] w-full">
-                <Line data={evalChartData.data} options={evalChartData.options as any} />
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-4 mt-2">
-              <div>
-                <div className="text-sm font-medium mb-1">Move Quality Breakdown</div>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  {Object.keys(moveQualityStyles).map(quality => {
-                    const whiteCount = whiteMoveQualities[quality.toLowerCase() as keyof MoveQualityCounts] || 0;
-                    const blackCount = blackMoveQualities[quality.toLowerCase() as keyof MoveQualityCounts] || 0;
-                    const style = moveQualityStyles[quality];
+              
+              <div className="mt-4 border-t pt-4">
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center space-x-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleFirstMove}
+                      disabled={currentMoveIndex === -1}
+                    >
+                      <SkipBack className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handlePrevMove}
+                      disabled={currentMoveIndex === -1}
+                    >
+                      <SkipBack className="h-4 w-4" />
+                    </Button>
                     
-                    return (
-                      <div key={quality} className={`flex justify-between items-center p-1 rounded ${style.bgColor}`}>
-                        <div className={`flex items-center gap-1 ${style.color}`}>
-                          <span>{style.icon}</span>
-                          <span>{quality}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Badge variant="outline" className="h-5 min-w-[20px] flex items-center justify-center">
-                            {whiteCount}
-                          </Badge>
-                          <Badge variant="outline" className="h-5 min-w-[20px] flex items-center justify-center bg-gray-800 text-white">
-                            {blackCount}
-                          </Badge>
-                        </div>
-                      </div>
-                    );
-                  })}
+                    {isPlayingThrough ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleStopPlayThrough}
+                      >
+                        <Pause className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handlePlayThrough}
+                        disabled={currentMoveIndex === moveHistory.length - 1}
+                      >
+                        <Play className="h-4 w-4" />
+                      </Button>
+                    )}
+                    
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleNextMove}
+                      disabled={currentMoveIndex === moveHistory.length - 1}
+                    >
+                      <SkipForward className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleLastMove}
+                      disabled={currentMoveIndex === moveHistory.length - 1}
+                    >
+                      <SkipForward className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={downloadPGN}
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Download Analysis
+                  </Button>
                 </div>
-              </div>
-              <div>
-                <div className="text-sm font-medium mb-1">Engine Settings</div>
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <label htmlFor="depth" className="text-xs text-muted-foreground">
-                      Depth
-                    </label>
-                    <Select 
-                      value={engineDepth.toString()} 
-                      onValueChange={(value) => onEngineDepthChange(Number(value))}
-                    >
-                      <SelectTrigger className="w-20 h-7">
-                        <SelectValue placeholder="Depth" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="12">12</SelectItem>
-                        <SelectItem value="15">15</SelectItem>
-                        <SelectItem value="18">18</SelectItem>
-                        <SelectItem value="20">20</SelectItem>
-                        <SelectItem value="22">22</SelectItem>
-                      </SelectContent>
-                    </Select>
+                
+                <div className="mt-2">
+                  <div className="text-sm text-gray-500">
+                    Move {currentMoveIndex + 1} of {moveHistory.length}
                   </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <label htmlFor="showLines" className="text-xs text-muted-foreground">
-                      Show Engine Lines
-                    </label>
-                    <input
-                      type="checkbox"
-                      id="showLines"
-                      checked={true}
-                      onChange={() => {}} // Add empty onChange handler to fix controlled component warning
-                      className="h-4 w-4"
-                    />
+                  <Progress
+                    value={(currentMoveIndex + 1) / Math.max(1, moveHistory.length) * 100}
+                    className="h-1 mt-1"
+                  />
+                </div>
+                
+                <div className="mt-4 flex justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="bg-white w-3 h-3 rounded-full"></div>
+                    <span>{game.white.username}</span>
+                    <span className="text-sm text-gray-500">
+                      {accuracies.white > 0 ? `${Math.round(accuracies.white * 100)}%` : ""}
+                    </span>
                   </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <label htmlFor="playbackSpeed" className="text-xs text-muted-foreground">
-                      Playback Speed
-                    </label>
-                    <Select 
-                      value={playbackSpeed.toString()} 
-                      onValueChange={(value) => onPlaybackSpeedChange(Number(value))}
-                    >
-                      <SelectTrigger className="w-20 h-7">
-                        <SelectValue placeholder="Speed" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="3000">Slow</SelectItem>
-                        <SelectItem value="1500">Normal</SelectItem>
-                        <SelectItem value="800">Fast</SelectItem>
-                        <SelectItem value="400">Very Fast</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-500">
+                      {accuracies.black > 0 ? `${Math.round(accuracies.black * 100)}%` : ""}
+                    </span>
+                    <span>{game.black.username}</span>
+                    <div className="bg-black w-3 h-3 rounded-full"></div>
                   </div>
                 </div>
                 
-                <div className="mt-4">
-                  <div className="text-sm font-medium mb-2">Game Phase Quality</div>
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <span className="text-muted-foreground block mb-1">Opening</span>
-                      <div className="flex justify-between items-center">
-                        <div className="w-3 h-3 bg-white border border-gray-300 rounded-full"></div>
-                        {getQualityBadge(openingQuality.white)}
+                <div className="mt-2 flex justify-between">
+                  <div className="flex gap-1">
+                    {capturedPieces.black.map((piece, i) => (
+                      <span key={i} className="text-lg">
+                        {piece}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-1">
+                    {capturedPieces.white.map((piece, i) => (
+                      <span key={i} className="text-lg">
+                        {piece}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        
+        <div className="md:col-span-2 flex flex-col gap-4">
+          <ChessPlayerStats 
+            whiteUsername={game.white.username} 
+            blackUsername={game.black.username}
+            whiteRating={game.white.rating}
+            blackRating={game.black.rating}
+            whiteAccuracy={accuracies.white}
+            blackAccuracy={accuracies.black}
+            moveQuality={moveQuality}
+            estimatedPerformance={{
+              white: whiteCurrentRating || 0,  // Provide default value of 0 when undefined
+              black: blackCurrentRating || 0   // Provide default value of 0 when undefined
+            }}
+            currentMoveIndex={currentMoveIndex}
+          />
+          
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Move List</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <ChessMoveList 
+                moves={moveHistory} 
+                currentMoveIndex={currentMoveIndex} 
+                onSelectMove={goToMove}
+                isNavigating={isNavigating}
+              />
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+      
+      <div className="mt-6">
+        <Tabs defaultValue="analysis">
+          <TabsList>
+            <TabsTrigger value="analysis">Analysis</TabsTrigger>
+            <TabsTrigger value="insights">Insights</TabsTrigger>
+          </TabsList>
+          
+          <TabsContent value="analysis">
+            <Card>
+              <CardHeader>
+                <CardTitle>Move-by-Move Analysis</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left p-2">#</th>
+                        <th className="text-left p-2">Move</th>
+                        <th className="text-left p-2">Player</th>
+                        <th className="text-left p-2">Eval</th>
+                        <th className="text-left p-2">Diff</th>
+                        <th className="text-left p-2">Quality</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {moveAnalysis.map((analysis, index) => analysis && (
+                        <tr 
+                          key={index} 
+                          className="border-b hover:bg-gray-50 cursor-pointer"
+                          onClick={() => goToMove(index)}
+                        >
+                          <td className="p-2">{analysis.moveNumber}</td>
+                          <td className="p-2 font-medium">{analysis.moveText}</td>
+                          <td className="p-2">{analysis.playerColor === 'white' ? 'White' : 'Black'}</td>
+                          <td className="p-2 font-mono">
+                            {analysis.evaluation > 0 ? '+' : ''}
+                            {analysis.evaluation.toFixed(2)}
+                          </td>
+                          <td className={`p-2 font-mono ${
+                            analysis.evalDifference > 0.2 ? 'text-red-500' : 
+                            analysis.evalDifference < -0.2 ? 'text-green-500' : ''
+                          }`}>
+                            {analysis.evalDifference > 0 ? '+' : ''}
+                            {analysis.evalDifference.toFixed(2)}
+                          </td>
+                          <td className={`p-2 ${getMoveQualityClass(analysis.quality)}`}>
+                            {analysis.quality}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+          
+          <TabsContent value="insights">
+            <Card>
+              <CardHeader>
+                <CardTitle>Game Insights</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <h3 className="font-bold mb-2">Critical Moments</h3>
+                    {moveAnalysis.filter(m => m?.quality === 'Blunder' || m?.quality === 'Brilliant').length > 0 ? (
+                      <div className="space-y-2">
+                        {moveAnalysis
+                          .filter(m => m?.quality === 'Blunder' || m?.quality === 'Brilliant')
+                          .slice(0, 3)
+                          .map((analysis, i) => (
+                            <div 
+                              key={i} 
+                              className="p-2 border rounded hover:bg-gray-50 cursor-pointer"
+                              onClick={() => goToMove(moveAnalysis.indexOf(analysis))}
+                            >
+                              <div className="flex justify-between">
+                                <span>{analysis.moveText}</span>
+                                <span className={getMoveQualityClass(analysis.quality)}>
+                                  {analysis.quality}
+                                </span>
+                              </div>
+                              <div className="text-sm text-gray-500">
+                                Eval change: {analysis.evalDifference > 0 ? '+' : ''}
+                                {analysis.evalDifference.toFixed(2)}
+                              </div>
+                            </div>
+                          ))
+                        }
                       </div>
-                      <div className="flex justify-between items-center mt-1">
-                        <div className="w-3 h-3 bg-black rounded-full"></div>
-                        {getQualityBadge(openingQuality.black)}
+                    ) : (
+                      <p className="text-gray-500">No critical moments identified yet.</p>
+                    )}
+                  </div>
+                  
+                  <div>
+                    <h3 className="font-bold mb-2">Move Quality Summary</h3>
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span>Best Moves:</span>
+                        <span className="font-medium text-green-500">
+                          {
+                            moveAnalysis.filter(m => 
+                              m?.quality === 'Best' || 
+                              m?.quality === 'Brilliant' || 
+                              m?.quality === 'Great'
+                            ).length
+                          }
+                        </span>
                       </div>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block mb-1">Middlegame</span>
-                      <div className="flex justify-between items-center">
-                        <div className="w-3 h-3 bg-white border border-gray-300 rounded-full"></div>
-                        {getQualityBadge(middlegameQuality.white)}
+                      <div className="flex justify-between">
+                        <span>Good Moves:</span>
+                        <span className="font-medium text-blue-500">
+                          {
+                            moveAnalysis.filter(m => 
+                              m?.quality === 'Good' || 
+                              m?.quality === 'Excellent'
+                            ).length
+                          }
+                        </span>
                       </div>
-                      <div className="flex justify-between items-center mt-1">
-                        <div className="w-3 h-3 bg-black rounded-full"></div>
-                        {getQualityBadge(middlegameQuality.black)}
+                      <div className="flex justify-between">
+                        <span>Inaccuracies/Mistakes:</span>
+                        <span className="font-medium text-yellow-500">
+                          {
+                            moveAnalysis.filter(m => 
+                              m?.quality === 'Inaccuracy' || 
+                              m?.quality === 'Mistake'
+                            ).length
+                          }
+                        </span>
                       </div>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block mb-1">Endgame</span>
-                      <div className="flex justify-between items-center">
-                        <div className="w-3 h-3 bg-white border border-gray-300 rounded-full"></div>
-                        {getQualityBadge(endgameQuality.white)}
-                      </div>
-                      <div className="flex justify-between items-center mt-1">
-                        <div className="w-3 h-3 bg-black rounded-full"></div>
-                        {getQualityBadge(endgameQuality.black)}
+                      <div className="flex justify-between">
+                        <span>Blunders:</span>
+                        <span className="font-medium text-red-500">
+                          {moveAnalysis.filter(m => m?.quality === 'Blunder').length}
+                        </span>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-      
-      {/* Playback controls */}
-      <div className="flex justify-between gap-2 mb-4">
-        <Button variant="outline" size="sm" onClick={onFirstMove}>
-          <SkipBack className="h-4 w-4" />
-        </Button>
-        <Button variant="outline" size="sm" onClick={onPrevMove} disabled={moveIndex === 0}>
-          <SkipBack className="h-4 w-4 rotate-90" />
-        </Button>
-        {isPlaying ? (
-          <Button variant="destructive" size="sm" onClick={onStopPlayThrough}>
-            <Pause className="h-4 w-4 mr-2" />
-            Stop
-          </Button>
-        ) : (
-          <Button 
-            variant="default" 
-            size="sm" 
-            onClick={onPlayThrough}
-            disabled={moveIndex >= moveHistory.length}
-          >
-            <Play className="h-4 w-4 mr-2" />
-            Play
-          </Button>
-        )}
-        <Button 
-          variant="outline" 
-          size="sm" 
-          onClick={onNextMove} 
-          disabled={moveIndex >= moveHistory.length}
-        >
-          <SkipForward className="h-4 w-4 rotate-90" />
-        </Button>
-        <Button 
-          variant="outline" 
-          size="sm" 
-          onClick={onLastMove}
-          disabled={moveIndex >= moveHistory.length}
-        >
-          <SkipForward className="h-4 w-4" />
-        </Button>
-      </div>
-      
-      {/* Current position status */}
-      <div className="bg-muted p-3 rounded-md">
-        <div className="text-sm mb-2">
-          Move {Math.floor(moveIndex / 2) + 1}{moveIndex % 2 === 0 ? ". White" : ". Black"}
-          {moveIndex < moveHistory.length ? (
-            <span className="ml-1">to play <span className="font-medium">{moveHistory[moveIndex]}</span></span>
-          ) : (
-            <span className="ml-1">Game Over</span>
-          )}
-        </div>
-        
-        {moveIndex > 0 && (
-          <div className="mt-2">
-            {getCurrentMoveQuality()}
-          </div>
-        )}
-        
-        {evaluation && (
-          <div className="mt-2 text-sm">
-            <span className="text-muted-foreground">Evaluation: </span>
-            <span className="font-medium">
-              {evaluation.eval > 0 ? "+" : ""}{evaluation.eval.toFixed(2)}
-            </span>
-            <span className="ml-2 text-muted-foreground">
-              {getEvaluationDescription(evaluation.eval)}
-            </span>
-          </div>
-        )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
-  )
-}
+  );
+};
+
+export default GameReview;

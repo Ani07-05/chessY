@@ -73,7 +73,7 @@ interface Poll {
 }
 
 interface GameData {
-  fen: any
+  fen: string
   playerColor: string
   opponentColor: string
   opponentUsername: string
@@ -173,13 +173,13 @@ export default function Dashboard() {
         if (newProfile) {
           setUserProfile({
             id: newProfile.id,
-            username: newProfile.username,
-            chessUsername: newProfile.chess_username,
+            username: newProfile.username ?? "User",
+            chessUsername: newProfile.chess_username ?? "hikaru",
             role: "user",
-            email: newProfile.email,
-            avatarUrl: newProfile.avatar_url,
+            email: newProfile.email ?? undefined,
+            avatarUrl: newProfile.avatar_url ?? undefined,
           })
-          setUsername(newProfile.chess_username)
+          setUsername(newProfile.chess_username ?? "magnuscarlsen")
         }
       } else {
         setUserProfile({
@@ -187,8 +187,8 @@ export default function Dashboard() {
           username: profile.username || session.user.email?.split("@")[0] || "User",
           chessUsername: profile.chess_username || "magnuscarlsen",
           role: profile.role || "user",
-          email: profile.email,
-          avatarUrl: profile.avatar_url,
+          email: profile.email ?? undefined,
+          avatarUrl: profile.avatar_url ?? undefined,
         })
         setUsername(profile.chess_username || "magnuscarlsen")
         setIsSuperAdmin(profile.role === "admin" || profile.role === "superuser")
@@ -399,7 +399,7 @@ export default function Dashboard() {
       }
 
       // Update votes object
-      const votes = currentPoll.votes || {}
+      const votes: Record<string, string> = currentPoll.votes as Record<string, string> || {}
       votes[session.user.id] = optionKey
 
       // Update the poll
@@ -443,7 +443,12 @@ export default function Dashboard() {
             if (typeof poll.options === "string") {
               parsedOptions = JSON.parse(poll.options)
             } else if (poll.options && typeof poll.options === "object") {
-              parsedOptions = poll.options
+              parsedOptions = Object.entries(poll.options).reduce((acc, [key, value]) => {
+                if (typeof value === 'string') {
+                  acc[key] = value;
+                }
+                return acc;
+              }, {} as Record<string, string>);
             }
           } catch (e) {
             console.error("Error parsing options for poll:", poll.id, e)
@@ -452,11 +457,16 @@ export default function Dashboard() {
 
           let parsedVotes: Record<string, string> = {}
           try {
-            // Handle different formats of votes
+              // Handle different formats of votes
             if (typeof poll.votes === "string") {
               parsedVotes = JSON.parse(poll.votes)
-            } else if (poll.votes && typeof poll.votes === "object") {
-              parsedVotes = poll.votes
+            } else if (poll.votes && typeof poll.votes === "object" && !Array.isArray(poll.votes)) {
+              parsedVotes = Object.entries(poll.votes).reduce((acc, [key, value]) => {
+                if (typeof value === 'string') {
+                  acc[key] = value;
+                }
+                return acc;
+              }, {} as Record<string, string>);
             }
           } catch (e) {
             console.error("Error parsing votes for poll:", poll.id, e)
@@ -464,10 +474,14 @@ export default function Dashboard() {
           }
 
           return {
-            ...poll,
-            options: parsedOptions,
-            votes: parsedVotes,
-          }
+                      id: poll.id,
+                      question: poll.question,
+                      options: parsedOptions,
+                      votes: parsedVotes,
+                      active: poll.active,
+                      created_at: poll.created_at,
+                      type: typeof poll.type === 'string' && (poll.type === 'regular' || poll.type === 'quiz') ? poll.type : undefined
+                    } as Poll
         })
 
         setActivePolls(parsedPolls)

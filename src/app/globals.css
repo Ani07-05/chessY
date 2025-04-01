@@ -1,4 +1,6 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 @plugin "tailwindcss-animate";
 
@@ -78,6 +80,14 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(0.269 0 0);
   --sidebar-ring: oklch(0.439 0 0);
+
+  /* Chess-specific dark theme colors */
+  --chess-dark-square: oklch(0.269 0 0);
+  --chess-light-square: oklch(0.345 0 0);
+  --chess-highlight: oklch(0.488 0.243 264.376);
+  --chess-move-indicator: oklch(0.645 0.246 16.439);
+  --chess-evaluation-positive: oklch(0.696 0.17 162.48);
+  --chess-evaluation-negative: oklch(0.577 0.245 27.325);
 }
 
 @theme inline {
@@ -127,3 +137,129 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Chess-specific styles */
+html.dark,
+body.dark {
+  @apply bg-black text-white;
+}
+
+/* Chess board customizations */
+.chess-board-container {
+  @apply rounded-lg overflow-hidden border border-border;
+}
+
+/* Chess piece styles */
+.chess-piece {
+  @apply transition-transform duration-200;
+}
+
+.chess-piece-white {
+  filter: drop-shadow(0 1px 2px rgba(255, 255, 255, 0.2));
+}
+
+.chess-piece-black {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+}
+
+/* Move quality indicators */
+.move-quality-brilliant {
+  @apply text-purple-400;
+}
+
+.move-quality-great {
+  @apply text-indigo-400;
+}
+
+.move-quality-best {
+  @apply text-green-400;
+}
+
+.move-quality-good {
+  @apply text-blue-400;
+}
+
+.move-quality-inaccuracy {
+  @apply text-yellow-400;
+}
+
+.move-quality-mistake {
+  @apply text-orange-400;
+}
+
+.move-quality-blunder {
+  @apply text-red-400;
+}
+
+/* Evaluation bar */
+.evaluation-bar {
+  @apply relative h-full w-1.5 bg-muted overflow-hidden rounded-full;
+}
+
+.evaluation-bar-value {
+  @apply absolute bottom-0 w-full transition-all duration-300 ease-out;
+}
+
+.evaluation-bar-positive {
+  @apply bg-chart-2;
+}
+
+.evaluation-bar-negative {
+  @apply bg-chart-5;
+}
+
+/* Custom scrollbar for the dark theme */
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  @apply bg-muted;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  @apply bg-border rounded-full;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/50;
+}
+
+/* Analysis panel animations */
+@keyframes pulse-analysis {
+  0%,
+  100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.analysis-loading {
+  animation: pulse-analysis 2s infinite;
+}
+
+/* Move list styling */
+.move-list-item {
+  @apply px-2 py-1 rounded-md transition-colors;
+}
+
+.move-list-item:hover {
+  @apply bg-accent/50;
+}
+
+.move-list-item.active {
+  @apply bg-primary text-primary-foreground;
+}
+
+/* Captured pieces display */
+.captured-pieces {
+  @apply flex flex-wrap gap-0.5 text-lg;
+}
+
+.captured-piece {
+  @apply opacity-75;
+}
+

@@ -88,12 +88,12 @@ export interface GameData {
  * Evaluates a chess position using the chess-api.com service
  * 
  * @param options Request options including FEN and analysis parameters
- * @param timeout Timeout in milliseconds (default: 5000ms)
+ * @param timeout Timeout in milliseconds (default: 15000ms)
  * @returns Promise resolving to the evaluation response
  */
 export async function evaluatePosition(
   options: ChessApiRequestOptions,
-  timeout: number = 5000
+  timeout: number = 15000
 ): Promise<ChessApiResponse> {
   // Generate a request ID for correlation if not provided
   const requestId = options.taskId || Math.random().toString(36).substring(2, 10);
@@ -140,7 +140,7 @@ export async function evaluatePosition(
     }
     
     // Process principal variations if available
-    let processedResponse: ChessApiResponse = {
+    const processedResponse: ChessApiResponse = {
       ...apiResponse,
       fen: options.fen,
       depth: apiResponse.depth || options.depth || 12,
@@ -223,7 +223,8 @@ export function simulateEngineResponse(fen: string, engineDepth: number = 12): C
     // Very simple material count evaluation
     let evaluation = 0;
     const position = fen.split(' ')[0];
-    const sideToMove = fen.split(' ')[1];
+    // We don't need to use sideToMove in this implementation, so commenting it out
+    // const sideToMove = fen.split(' ')[1];
     
     // Count material
     for (const piece of position) {
@@ -252,16 +253,21 @@ export function simulateEngineResponse(fen: string, engineDepth: number = 12): C
       winChance: winChance,
       fen: fen,
       type: 'move',
-      pv: []
+      pv: [],
+      text: "",
+      move: ""
     };
-  } catch (error) {
+  } catch (e) {
     // Fallback response if simulation fails
+    console.error('Error in simulation engine:', e);
     return {
       eval: 0,
       depth: engineDepth,
       winChance: 50,
       fen: fen,
-      type: 'move'
+      type: 'move',
+      text: "",
+      move: ""
     };
   }
 }

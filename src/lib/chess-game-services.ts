@@ -1,248 +1,197 @@
-/**
- * Chess Game Service
- * Provides functionality for fetching and processing chess games from Chess.com
- */
+// Define the type for game result
+type GameResult = "win" | "loss" | "draw"
 
-export interface ChessGamePlayer {
-    username: string;
-    rating?: number;
-    result: string;
+// Define the player info type
+interface PlayerInfo {
+  username: string
+  rating?: number
+  result: GameResult
+}
+
+// Define the Chess.com API game data type
+interface ChessGameData {
+  url: string
+  pgn: string
+  time_control: string
+  end_time: number
+  white: PlayerInfo
+  black: PlayerInfo
+  // Add other properties as needed
+}
+
+// Archive data from Chess.com API
+interface ArchiveData {
+  games: ChessGameData[]
+}
+
+/**
+ * Fetches a specific chess game by ID from Chess.com archives
+ * @param gameId The ID of the game to fetch
+ * @param username Optional username to search in specific user archives
+ * @returns The game data
+ */
+export async function fetchGameById(gameId: string, username?: string): Promise<ChessGameData> {
+  if (!gameId) {
+    throw new Error("Game ID is required");
   }
   
-  export interface ChessGameData {
-    url: string;
-    pgn?: string;
-    fen?: string;
-    time_control: string;
-    end_time: number;
-    rated: boolean;
-    white: ChessGamePlayer;
-    black: ChessGamePlayer;
-    time_class: string;
-    rules: string;
-  }
-  
-  export interface FormattedGameData {
-    fen?: string;
-    pgn?: string;
-    playerColor: string;
-    opponentColor: string;
-    opponentUsername: string;
-    result: string;
-    resultText: string;
-    resultClass: string;
-    date: string;
-    time: string;
-    timeControl: string;
-    url: string;
-    white: ChessGamePlayer;
-    black: ChessGamePlayer;
-    end_time: number;
-    gameId?: string;
-  }
-  
-  /**
-   * Fetches archives of games for a given username
-   * @param username - Chess.com username
-   * @returns Array of archive URLs
-   */
-  export async function fetchGameArchives(username: string): Promise<string[]> {
-    try {
-      const response = await fetch(`https://api.chess.com/pub/player/${username}/games/archives`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch game archives: ${response.statusText}`);
-      }
-      const data = await response.json();
-      return data.archives || [];
-    } catch (error) {
-      console.error("Error fetching game archives:", error);
-      throw error;
+  // If username is provided, use it, otherwise try recent archives
+  const targetUsername = username || "aggani007"; // Default username if none provided
+
+  try {
+    // Try to fetch the archives list for the user
+    const archivesResponse = await fetch(`https://api.chess.com/pub/player/${targetUsername}/games/archives`);
+    
+    if (!archivesResponse.ok) {
+      throw new Error(`Failed to fetch archives: ${archivesResponse.statusText}`);
     }
-  }
-  
-  /**
-   * Fetches games for a specific month
-   * @param archiveUrl - URL to the monthly archive
-   * @returns Array of game data objects
-   */
-  export async function fetchGamesForMonth(archiveUrl: string): Promise<ChessGameData[]> {
-    try {
-      const response = await fetch(archiveUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch monthly games: ${response.statusText}`);
-      }
-      const data = await response.json();
-      return data.games || [];
-    } catch (error) {
-      console.error("Error fetching monthly games:", error);
-      throw error;
+    
+    const archivesData = await archivesResponse.json();
+    
+    if (!archivesData.archives || archivesData.archives.length === 0) {
+      throw new Error(`No archives found for ${targetUsername}`);
     }
-  }
-  
-  /**
-   * Fetches a specific game by its unique ID by searching through recent monthly archives
-   * @param gameId - Chess.com game ID (numeric or URL)
-   * @param username - Chess.com username (optional, speeds up search)
-   * @returns Game data object
-   */
-  export async function fetchGameById(gameId: string, username?: string): Promise<ChessGameData> {
-    try {
-      // Extract numeric ID if full URL was provided
-      const numericId = gameId.includes('/') ? gameId.split('/').pop() : gameId;
-      
-      if (!numericId) {
-        throw new Error("Invalid game ID");
-      }
-      
-      // If username is provided, search through their archives
-      if (username) {
-        const archives = await fetchGameArchives(username);
-        
-        // Sort archives in descending order (most recent first)
-        const sortedArchives = [...archives].sort((a, b) => b.localeCompare(a));
-        
-        // Look through the 3 most recent months (if available)
-        const recentArchives = sortedArchives.slice(0, 3);
-        
-        for (const archive of recentArchives) {
-          const games = await fetchGamesForMonth(archive);
-          
-          // Find the game with matching ID
-          const game = games.find(g => {
-            const gameUrlId = g.url.split('/').pop();
-            return gameUrlId === numericId;
-          });
-          
-          if (game) {
-            console.log(`Found game in archive: ${archive}`);
-            return game;
-          }
-        }
-      }
-      
-      // Fallback: Try to fetch directly from the March 2025 archive as suggested
-      // (use this for development/testing with known data)
+    
+    // Sort archives in descending order (newest first)
+    const sortedArchives = [...archivesData.archives].sort().reverse();
+    
+    // Search for the game in the archives, starting with the most recent
+    for (const archiveUrl of sortedArchives) {
       try {
-        const specificArchive = `https://api.chess.com/pub/player/aggani007/games/2025/03`;
-        const games = await fetchGamesForMonth(specificArchive);
-        
-        const game = games.find(g => {
-          const gameUrlId = g.url.split('/').pop();
-          return gameUrlId === numericId;
-        });
-        
-        if (game) {
-          console.log(`Found game in hardcoded archive`);
-          return game;
+        const gameData = await searchGameInArchive(archiveUrl, gameId);
+        if (gameData) {
+          return gameData;
         }
-      } catch (fallbackError) {
-        console.error("Fallback archive search failed:", fallbackError);
+      } catch (error) {
+        console.warn(`Error searching archive ${archiveUrl}:`, error);
+        // Continue to the next archive
+      }
+    }
+    
+    // If we've searched all archives and haven't found the game, try the most recent month specifically
+    // This is a fallback mechanism since sometimes games might not appear in the archives list immediately
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    const formattedMonth = month < 10 ? `0${month}` : `${month}`;
+    
+    const currentMonthArchiveUrl = `https://api.chess.com/pub/player/${targetUsername}/games/${year}/${formattedMonth}`;
+    
+    try {
+      const gameData = await searchGameInArchive(currentMonthArchiveUrl, gameId);
+      if (gameData) {
+        return gameData;
+      }
+    } catch (error) {
+      console.error(`Error searching current month archive:`, error);
+    }
+    
+    // If we've exhausted all options, try the March 2025 archive specifically as mentioned in the original code
+    try {
+      const hardcodedArchiveUrl = `https://api.chess.com/pub/player/${targetUsername}/games/2025/03`;
+      const gameData = await searchGameInArchive(hardcodedArchiveUrl, gameId);
+      if (gameData) {
+        return gameData;
+      }
+    } catch (error) {
+      console.error(`Error searching hardcoded archive:`, error);
+    }
+
+    throw new Error(`Game with ID ${gameId} not found in any archive`);
+  } catch (error) {
+    console.error("Error fetching game by ID:", error);
+    throw error;
+  }
+}
+
+/**
+ * Search for a specific game in an archive
+ * @param archiveUrl The URL of the archive to search
+ * @param gameId The ID of the game to find
+ * @returns The game data or null if not found
+ */
+async function searchGameInArchive(archiveUrl: string, gameId: string): Promise<ChessGameData | null> {
+  const response = await fetch(archiveUrl);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch archive ${archiveUrl}: ${response.statusText}`);
+  }
+  
+  const archiveData: ArchiveData = await response.json();
+  
+  if (!archiveData.games || archiveData.games.length === 0) {
+    return null;
+  }
+  
+  // Search for the game with matching ID
+  const game = archiveData.games.find((g) => {
+    const gameUrlId = g.url.split("/").pop();
+    return gameUrlId === gameId;
+  });
+  
+  return game || null;
+}
+
+/**
+ * Fetches recent games for a user from Chess.com
+ * @param username The username to fetch games for
+ * @param limit The maximum number of games to return
+ * @returns An array of recent games
+ */
+export async function fetchRecentGames(username: string, limit = 10): Promise<ChessGameData[]> {
+  if (!username) {
+    throw new Error("Username is required");
+  }
+  
+  try {
+    // Fetch the archives list
+    const archivesResponse = await fetch(`https://api.chess.com/pub/player/${username}/games/archives`);
+    
+    if (!archivesResponse.ok) {
+      throw new Error(`Failed to fetch archives: ${archivesResponse.statusText}`);
+    }
+    
+    const archivesData = await archivesResponse.json();
+    
+    if (!archivesData.archives || archivesData.archives.length === 0) {
+      return [];
+    }
+    
+    // Sort archives in descending order (newest first)
+    const sortedArchives = [...archivesData.archives].sort().reverse();
+    
+    // Get games from the most recent archives until we have enough
+    const allGames: ChessGameData[] = [];
+    
+    for (const archiveUrl of sortedArchives) {
+      if (allGames.length >= limit) {
+        break;
       }
       
-      throw new Error(`Game with ID ${numericId} not found in recent archives`);
-    } catch (error) {
-      console.error("Error fetching game:", error);
-      throw error;
-    }
-  }
-  
-  /**
-   * Fetches the N most recent games for a user
-   * @param username - Chess.com username
-   * @param limit - Maximum number of games to fetch (default: 5)
-   * @returns Array of formatted game data objects
-   */
-  export async function fetchRecentGames(username: string, limit: number = 5): Promise<FormattedGameData[]> {
-    try {
-      const archives = await fetchGameArchives(username);
-      if (archives.length === 0) {
-        return [];
+      try {
+        const response = await fetch(archiveUrl);
+        
+        if (!response.ok) {
+          console.warn(`Failed to fetch archive ${archiveUrl}: ${response.statusText}`);
+          continue;
+        }
+        
+        const archiveData: ArchiveData = await response.json();
+        
+        if (archiveData.games && archiveData.games.length > 0) {
+          // Sort games by end_time in descending order (newest first)
+          const sortedGames = [...archiveData.games].sort((a, b) => b.end_time - a.end_time);
+          
+          allGames.push(...sortedGames.slice(0, limit - allGames.length));
+        }
+      } catch (error) {
+        console.warn(`Error fetching archive ${archiveUrl}:`, error);
       }
-  
-      // Get the most recent archive
-      const latestArchiveUrl = archives[archives.length - 1];
-      const games = await fetchGamesForMonth(latestArchiveUrl);
-  
-      // Sort by end time (most recent first) and take the N most recent games
-      const sortedGames = games
-        .sort((a, b) => b.end_time - a.end_time)
-        .slice(0, limit);
-  
-      // Process games to add result information
-      return sortedGames.map((game) => formatGameData(game, username));
-    } catch (error) {
-      console.error("Error fetching recent games:", error);
-      throw error;
     }
-  }
-  
-  /**
-   * Transforms raw game data into a more usable format
-   * @param game - Raw game data from Chess.com API
-   * @param username - Chess.com username to identify the player
-   * @returns Formatted game data
-   */
-  export function formatGameData(game: ChessGameData, username: string): FormattedGameData {
-    const playerColor = game.white.username.toLowerCase() === username.toLowerCase() ? "white" : "black";
-    const opponentColor = playerColor === "white" ? "black" : "white";
-    const result = game[playerColor].result;
-    const gameId = game.url.split('/').pop();
-  
-    return {
-      ...game,
-      gameId,
-      playerColor,
-      opponentColor,
-      opponentUsername: game[opponentColor].username,
-      result,
-      resultText: result === "win" ? "Victory" : result === "draw" ? "Draw" : "Defeat",
-      resultClass: result === "win" ? "text-green-500" : result === "draw" ? "text-yellow-500" : "text-red-500",
-      date: new Date(game.end_time * 1000).toLocaleDateString(),
-      time: new Date(game.end_time * 1000).toLocaleTimeString(),
-      timeControl: game.time_control,
-    };
-  }
-  
-  /**
-   * Calculates win rate based on game results
-   * @param wins - Number of wins
-   * @param losses - Number of losses
-   * @param draws - Number of draws
-   * @returns Win rate percentage
-   */
-  export function calculateWinRate(wins: number, losses: number, draws: number): number {
-    const total = wins + losses + draws;
-    if (total === 0) return 0;
-    return Math.round((wins / total) * 100);
-  }
-  
-  /**
-   * Parse PGN string to extract moves
-   * @param pgn - PGN string representation of a game
-   * @returns Array of moves in SAN notation
-   */
-  export function parsePgnMoves(pgn: string): string[] {
-    // This is a simplified PGN parser that extracts moves
-    // Remove comments
-    let cleanPgn = pgn.replace(/\{[^}]*\}/g, '');
     
-    // Remove header tags
-    cleanPgn = cleanPgn.replace(/\[\s*\w+\s*"[^"]*"\s*\]\s*/g, '');
-    
-    // Remove move numbers
-    cleanPgn = cleanPgn.replace(/\d+\.\s*/g, '');
-    
-    // Remove result
-    cleanPgn = cleanPgn.replace(/1-0|0-1|1\/2-1\/2|\*/g, '');
-    
-    // Split by whitespace and filter empty strings
-    return cleanPgn.split(/\s+/).filter(move => move.trim().length > 0);
+    return allGames.slice(0, limit);
+  } catch (error) {
+    console.error("Error fetching recent games:", error);
+    throw error;
   }
-  
-  /**
-   * Generates a unique task ID for Chess API requests
-   * @returns Unique string ID
-   */
-  export function generateTaskId(): string {
-    return Math.random().toString(36).substring(2, 12);
-  }
+}

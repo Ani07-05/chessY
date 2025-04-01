@@ -13,7 +13,9 @@ import {
   Tooltip,
   Legend,
   BarElement,
-  ArcElement
+  ArcElement,
+  ChartOptions,
+  TooltipItem
 } from 'chart.js';
 // Helper functions for move quality styling
 const getMoveQualityClass = (quality: string): string => {
@@ -126,7 +128,7 @@ export function EvaluationChart({
       legend: { display: false },
       tooltip: {
         callbacks: {
-          label: (context: any) => {
+          label: (context: TooltipItem<'line'>) => {
             const value = context.parsed.y;
             return value > 0 ? `+${value.toFixed(2)}` : `${value.toFixed(2)}`;
           }
@@ -164,13 +166,23 @@ export function EvaluationChart({
 
   return (
     <div style={{ height: `${height}px` }}>
-      <Line data={data} options={options as any} />
+      <Line data={data} options={options as ChartOptions<'line'>} />
     </div>
   );
 }
 
+interface MoveAnalysis {
+  playerColor: string;
+  quality: string;
+  evalAfter?: number;
+  moveNumber?: number;
+  move?: string;
+  fen?: string;
+  estimatedRating?: number;
+}
+
 interface MoveQualityBreakdownProps {
-  moveAnalyses: any[];
+  moveAnalyses: MoveAnalysis[];
   playerColor?: string;
 }
 
@@ -224,14 +236,18 @@ export function MoveQualityBreakdown({ moveAnalyses, playerColor }: MoveQualityB
 
   return (
     <div style={{ height: '200px' }}>
-      <Pie data={data} options={options as any} />
+      <Pie data={data} options={options as ChartOptions<'pie'>} />
     </div>
   );
 }
 
 interface MoveQualityBarChartProps {
-  moveAnalyses: any[];
+  moveAnalyses: MoveAnalysis[];
   playerColor?: string;
+}
+
+interface MoveQualityGridProps {
+  moveAnalyses: MoveAnalysis[];
 }
 
 /**
@@ -293,18 +309,11 @@ export function MoveQualityBarChart({ moveAnalyses, playerColor }: MoveQualityBa
 
   return (
     <div style={{ height: '240px' }}>
-      <Bar data={data} options={options as any} />
+      <Bar data={data} options={options as ChartOptions<'bar'>} />
     </div>
   );
 }
 
-interface MoveQualityGridProps {
-  moveAnalyses: any[];
-}
-
-/**
- * Renders a grid of move quality counts with colored badges
- */
 export function MoveQualityGrid({ moveAnalyses }: MoveQualityGridProps) {
   if (!moveAnalyses || moveAnalyses.length === 0) {
     return <div className="text-center py-4 text-muted-foreground">No move data available</div>;
@@ -390,7 +399,7 @@ export function AccuracyComparison({
 interface GameSummaryCardProps {
   playerAccuracy: number;
   opponentAccuracy: number;
-  moveAnalyses: any[];
+  moveAnalyses: MoveAnalysis[];
   playerColor: string;
 }
 
