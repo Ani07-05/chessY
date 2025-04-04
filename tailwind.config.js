@@ -2,11 +2,12 @@
 module.exports = {
   darkMode: ["class"],
   content: [
-    "./pages/**/*.{js,jsx,ts,tsx}",
+    "./pages/**/*.{js,jsx,ts,tsx}", // If you have a pages directory
     "./components/**/*.{js,jsx,ts,tsx}",
     "./app/**/*.{js,jsx,ts,tsx}",
-    "./src/**/*.{js,jsx,ts,tsx}",
+    "./src/**/*.{js,jsx,ts,tsx}", // This often covers components and app
     "*.{js,ts,jsx,tsx,mdx}",
+    // Ensure any other directories with Tailwind classes are included
   ],
   prefix: "",
   theme: {
