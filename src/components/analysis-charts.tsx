@@ -391,7 +391,7 @@ export function AccuracyComparison({
 
   return (
     <div style={{ height: '140px' }}>
-      <Bar data={data} options={options as any} />
+      <Bar data={data} options={options as ChartOptions<'bar'>} />
     </div>
   );
 }

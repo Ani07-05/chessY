@@ -224,26 +224,24 @@ export default function Dashboard() {
     }
   }
 
-  const fetchRecentGames = useCallback(async (username: string) => {
+  const fetchRecentGames = useCallback(async (currentUsername: string) => {
     try {
-      const archives = await fetchGameArchives(username)
-      if (archives.length === 0) return []
-
-      // Get the most recent archive
-      const latestArchiveUrl = archives[archives.length - 1]
-      const games = await fetchGamesForMonth(latestArchiveUrl)
-
-      // Sort by end time (most recent first) and take the 5 most recent games
-      const sortedGames = games.sort((a: GameData, b: GameData) => b.end_time - a.end_time).slice(0, 5)
-
-      // Process games to add result information
+      if (!currentUsername) return []; // Return empty array if no username
+      const archives = await fetchGameArchives(currentUsername);
+      if (archives.length === 0) return [];
+      const latestArchiveUrl = archives[archives.length - 1];
+      const games = await fetchGamesForMonth(latestArchiveUrl);
+      const sortedGames = games.sort((a: GameData, b: GameData) => b.end_time - a.end_time).slice(0, 5);
       const processedGames = sortedGames.map((game: GameData) => {
-        const playerColor = game.white.username.toLowerCase() === username.toLowerCase() ? "white" : "black"
-        const opponentColor = playerColor === "white" ? "black" : "white"
-        const result = game[playerColor].result
-
+        const playerColor = game.white.username.toLowerCase() === currentUsername.toLowerCase() ? "white" : "black";
+        const opponentColor = playerColor === "white" ? "black" : "white";
+        const result = game[playerColor].result;
         return {
-          ...game,
+          fen: game.fen,
+          timeControl: game.timeControl,
+          white: game.white,
+          black: game.black,
+          end_time: game.end_time,
           playerColor,
           opponentColor,
           opponentUsername: game[opponentColor].username,
@@ -253,51 +251,51 @@ export default function Dashboard() {
           date: new Date(game.end_time * 1000).toLocaleDateString(),
           time: new Date(game.end_time * 1000).toLocaleTimeString(),
           url: game.url,
-        }
-      })
-
-      setRecentGames(processedGames)
+        };
+      });
+      setRecentGames(processedGames); // Update state here
     } catch (err) {
-      console.error("Error fetching recent games:", err)
+      console.error("Error fetching recent games:", err);
+      setRecentGames([]); // Clear or set empty on error
     }
-  }, [])
+  }, []); // Removed username dependency
 
-  const fetchClassProgress = useCallback(async () => {
+  const fetchClassProgress = useCallback(async (currentUsername: string) => {
     try {
-      if (!username) return
+      if (!currentUsername) return;
 
-      const lastClass = getLastClassDate()
-      const nextClass = getNextClassDate()
-      const daysUntilNext = getDaysUntilNextClass(nextClass)
+      const lastClass = getLastClassDate();
+      const nextClass = getNextClassDate();
+      const daysUntilNext = getDaysUntilNextClass(nextClass);
 
-      const archives = await fetchGameArchives(username)
-      let gamesPlayed = 0
-      let gamesWon = 0
-      let gamesDrawn = 0
-      let gamesLost = 0
+      const archives = await fetchGameArchives(currentUsername);
+      let gamesPlayed = 0;
+      let gamesWon = 0;
+      let gamesDrawn = 0;
+      let gamesLost = 0;
 
       // Get the most recent archives (last 2 months)
-      const recentArchives = archives.slice(-2)
+      const recentArchives = archives.slice(-2);
 
       for (const archiveUrl of recentArchives) {
-        const games = await fetchGamesForMonth(archiveUrl)
+        const games = await fetchGamesForMonth(archiveUrl);
 
         for (const game of games) {
-          const gameEndTime = new Date(game.end_time * 1000)
+          const gameEndTime = new Date(game.end_time * 1000);
           if (gameEndTime > lastClass && gameEndTime <= new Date()) {
-            gamesPlayed++
-            const playerColor = game.white.username.toLowerCase() === username.toLowerCase() ? "white" : "black"
-            const result = game[playerColor].result
+            gamesPlayed++;
+            const playerColor = game.white.username.toLowerCase() === currentUsername.toLowerCase() ? "white" : "black";
+            const result = game[playerColor].result;
 
-            if (result === "win") gamesWon++
-            else if (result === "draw" || result === "stalemate") gamesDrawn++
-            else gamesLost++
+            if (result === "win") gamesWon++;
+            else if (result === "draw" || result === "stalemate") gamesDrawn++;
+            else gamesLost++;
           }
         }
       }
 
       // Calculate level progress (example formula)
-      const levelProgress = Math.min(100, gamesWon * 15 + gamesDrawn * 5)
+      const levelProgress = Math.min(100, gamesWon * 15 + gamesDrawn * 5);
 
       setClassProgress({
         gamesPlayed,
@@ -308,18 +306,18 @@ export default function Dashboard() {
         lastClassDate: lastClass,
         nextClassDate: nextClass,
         daysUntilNextClass: daysUntilNext,
-      })
+      });
     } catch (err) {
-      console.error("Error fetching class progress:", err)
+      console.error("Error fetching class progress:", err);
     }
-  }, [username])
+  }, [getLastClassDate, getNextClassDate]); // Removed username dependency
 
   const refreshData = async () => {
     setRefreshing(true)
     try {
       await fetchUserProfile()
       if (username) {
-        await Promise.all([fetchStats(), fetchClassProgress(), fetchRecentGames(username)])
+        await Promise.all([fetchStats(username), fetchClassProgress(username), fetchRecentGames(username)])
       }
       await fetchActivePolls()
       toast.success("Data refreshed successfully")
@@ -331,13 +329,13 @@ export default function Dashboard() {
     }
   }
 
-  const fetchStats = useCallback(async () => {
-    if (!username) return
+  const fetchStats = useCallback(async (currentUsername: string) => {
+    if (!currentUsername) return;
 
     setLoading(true)
     setError("")
     try {
-      const response = await fetch(`https://api.chess.com/pub/player/${username}/stats`)
+      const response = await fetch(`https://api.chess.com/pub/player/${currentUsername}/stats`)
       if (!response.ok) throw new Error("Failed to fetch stats")
       const data = await response.json()
       setStats(data)
@@ -346,7 +344,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
-  }, [username])
+  }, [])
 
   const getYouTubeVideoId = (url: string) => {
     const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/
@@ -538,12 +536,26 @@ const handleReviewGame = (game: GameData) => {
   }, [fetchUserProfile])
 
   useEffect(() => {
-    if (username) {
-      fetchStats()
-      fetchClassProgress()
-      fetchRecentGames(username)
+    const currentUsername = userProfile?.chessUsername;
+    if (currentUsername) {
+      setLoading(true); // Start loading when fetching dependent data
+      Promise.all([
+        fetchStats(currentUsername),
+        fetchClassProgress(currentUsername),
+        fetchRecentGames(currentUsername),
+        fetchActivePolls() // Assuming this doesn't strictly depend on chessUsername
+      ]).catch(err => {
+        console.error("Error fetching dashboard data:", err);
+        setError("Failed to load some dashboard data.");
+      }).finally(() => {
+        setLoading(false); // Stop loading after all fetches complete or fail
+      });
+    } else {
+      // Handle case where profile exists but chessUsername doesn't, if necessary
+      setLoading(false); // Stop loading if no username to fetch data for
     }
-  }, [username, fetchStats, fetchClassProgress, fetchRecentGames])
+    // Add fetchActivePolls to dependencies if it should re-run when profile changes
+  }, [userProfile?.chessUsername, fetchStats, fetchClassProgress, fetchRecentGames, fetchActivePolls]);
 
   useEffect(() => {
     fetchNotifications()
@@ -606,17 +618,7 @@ const handleReviewGame = (game: GameData) => {
     )
   }
 
-  const getRatingChange = (type: "chess_rapid" | "chess_blitz" | "chess_bullet") => {
-    if (!stats || !stats[type]) return { value: 0, isPositive: false }
 
-    // This is a placeholder since we don't have historical data
-    // In a real app, you'd compare with previous ratings from your database
-    const change = Math.floor(Math.random() * 30) - 15 // Random number between -15 and 15
-    return {
-      value: Math.abs(change),
-      isPositive: change >= 0,
-    }
-  }
 
   const getWinRateData = (type: "chess_rapid" | "chess_blitz" | "chess_bullet") => {
     const record = stats?.[type]?.record
@@ -805,7 +807,7 @@ const handleReviewGame = (game: GameData) => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {["chess_rapid", "chess_blitz", "chess_bullet"].map((type) => {
                   const typedType = type as "chess_rapid" | "chess_blitz" | "chess_bullet"
-                  const ratingChange = getRatingChange(typedType)
+                  // const ratingChange = getRatingChange(typedType) // No longer needed for display
                   const displayName =
                     type.replace("chess_", "").charAt(0).toUpperCase() + type.replace("chess_", "").slice(1)
 
@@ -819,38 +821,7 @@ const handleReviewGame = (game: GameData) => {
                         <div className="flex justify-between items-end">
                           <div>
                             <div className="text-3xl font-bold">{stats?.[typedType]?.last.rating || "N/A"}</div>
-                            <div className="flex items-center mt-1">
-                              {ratingChange.isPositive ? (
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  className="h-4 w-4 text-green-500"
-                                >
-                                  <path d="m18 15-6-6-6 6" />
-                                </svg>
-                              ) : (
-                                <svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  className="h-4 w-4 text-red-500"
-                                >
-                                  <path d="m6 9 6 6 6-6" />
-                                </svg>
-                              )}
-                              <span className={ratingChange.isPositive ? "text-green-500" : "text-red-500"}>
-                                {ratingChange.value} pts
-                              </span>
-                            </div>
+                            {/* Removed rating change display block */}
                           </div>
                           <div className="text-right">
                             <div className="text-sm text-muted-foreground">Win Rate</div>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback, Suspense } from "react" // Import Suspense
 import { useSearchParams, useRouter } from "next/navigation"
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs"
 import { Button } from "@/components/ui/button"
@@ -52,16 +52,67 @@ interface GameData {
 // Define the type for the game service response
 type GameSide = "white" | "black"
 
-export default function ReviewPage() {
+// Define UserProfile type
+interface UserProfile {
+  id: string;
+  username?: string;
+  chess_username?: string;
+  // Add other relevant profile fields
+}
+
+// Loading component for Suspense fallback
+function LoadingFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="flex flex-col items-center gap-4">
+        <div className="animate-spin">
+          <RefreshCw className="h-8 w-8" />
+        </div>
+        <p className="text-gray-600">Loading game review...</p>
+      </div>
+    </div>
+  );
+}
+
+// Inner component containing the logic that uses useSearchParams
+function ReviewPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const supabase = createClientComponentClient()
 
   const [reviewGame, setReviewGame] = useState<GameData | null>(null)
   const [loading, setLoading] = useState(true)
-  const [userProfile, setUserProfile] = useState<any>(null)
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null) // Use UserProfile type
 
   // Fetch game data from URL parameters
+
+  const fetchUserProfile = useCallback(async () => { // Wrap in useCallback
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+
+      if (!session) {
+        console.log("No authenticated session found")
+        return
+      }
+
+      const { data: profile, error } = await supabase.from("users").select("*").eq("id", session.user.id).single()
+
+      if (error) {
+        console.error("Error fetching profile:", error)
+        return
+      }
+
+      if (profile) {
+        setUserProfile(profile as UserProfile) // Cast to UserProfile
+      }
+    } catch (err) {
+      console.error("Error fetching user profile:", err)
+    }
+  }, [supabase]); // Add supabase dependency
+  
+
   useEffect(() => {
     const fetchGameData = async () => {
       setLoading(true)
@@ -89,6 +140,7 @@ export default function ReviewPage() {
 
         console.log(`Fetching game with ID: ${gameId}, username: ${username || "not provided"}`)
 
+        
         // Import game service dynamically
         const { fetchGameById } = await import("@/lib/chess-game-services")
 
@@ -145,7 +197,7 @@ export default function ReviewPage() {
             const games = archiveData.games || []
 
             // Find the game with matching ID
-            const game = games.find((g: any) => {
+            const game = games.find((g: ChessGameData) => { // Use ChessGameData type
               const gameUrlId = g.url.split("/").pop()
               return gameUrlId === gameId
             })
@@ -197,34 +249,10 @@ export default function ReviewPage() {
     }
 
     fetchGameData()
-  }, [searchParams])
+  }, [searchParams, fetchUserProfile]) // Added fetchUserProfile dependency
 
   // Fetch user profile from Supabase
-  const fetchUserProfile = async () => {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
 
-      if (!session) {
-        console.log("No authenticated session found")
-        return
-      }
-
-      const { data: profile, error } = await supabase.from("users").select("*").eq("id", session.user.id).single()
-
-      if (error) {
-        console.error("Error fetching profile:", error)
-        return
-      }
-
-      if (profile) {
-        setUserProfile(profile)
-      }
-    } catch (err) {
-      console.error("Error fetching user profile:", err)
-    }
-  }
 
   if (loading) {
     return (
@@ -289,4 +317,13 @@ export default function ReviewPage() {
       </div>
     </div>
   )
+}
+
+// Default export wraps the content in Suspense
+export default function ReviewPage() {
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      <ReviewPageContent />
+    </Suspense>
+  );
 }

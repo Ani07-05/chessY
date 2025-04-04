@@ -1,8 +1,9 @@
 import React from 'react';
 import { Button } from "@/components/ui/button";
+import { Move } from 'chess.js'; // Import Move type
 
 interface ChessMoveListProps {
-  moves: any[];
+  moves: Move[]; // Use Move[] type
   currentMoveIndex: number;
   onSelectMove: (moveIndex: number) => void;
   isNavigating?: boolean;
@@ -78,4 +79,4 @@ const ChessMoveList: React.FC<ChessMoveListProps> = ({
   );
 };
 
-export default ChessMoveList;   
+export default ChessMoveList;

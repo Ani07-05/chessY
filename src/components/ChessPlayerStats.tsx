@@ -1,4 +1,4 @@
-import { Star, Award, TrendingUp, Circle, Sparkles, Zap, Check, Square, AlertCircle, XCircle } from "lucide-react";
+import { Star, Award, TrendingUp, Circle, Sparkles, Check, Square, AlertCircle, XCircle } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Progress } from "@/components/ui/progress";
 

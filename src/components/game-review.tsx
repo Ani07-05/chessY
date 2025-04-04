@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react";
-import { Chess } from "chess.js";
+import { Chess, Move, Square } from "chess.js"; 
 import { Chessboard } from "react-chessboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,9 +14,6 @@ import {
   SkipForward,
   RefreshCw,
   Download,
-  TrendingUp,
-  TrendingDown,
-  Minus
 } from "lucide-react";
 import ChessPlayerStats from "./ChessPlayerStats";
 import ChessEvaluationBar from "./ChessEvaluationBar";
@@ -24,7 +21,7 @@ import ChessMoveList from "./ChessMoveList";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 
-// Classification thresholds more aligned with chess.com
+
 const MOVE_CLASSIFICATIONS = {
   BRILLIANT: { threshold: 0.9, multiplier: 2.0 },
   GREAT: { threshold: 0.6, multiplier: 1.5 },
@@ -55,12 +52,23 @@ interface GameReviewProps {
   game: GameData;
   username: string;
   isOpen?: boolean;
-  onClose?: () => void;
 }
 
-const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps) => {
+interface MoveAnalysis {
+  moveNumber: number;
+  moveText: string;
+  move: string;
+  playerColor: 'white' | 'black';
+  prevEval: number;
+  evaluation: number;
+  evalDifference: number;
+  quality: string;
+  estimatedRating: number;
+}
+
+const GameReview = ({ game, username, isOpen = true }: GameReviewProps) => {
   const [chess, setChess] = useState<Chess | null>(null);
-  const [moveHistory, setMoveHistory] = useState<any[]>([]);
+  const [moveHistory, setMoveHistory] = useState<Move[]>([]); 
   const [currentMoveIndex, setCurrentMoveIndex] = useState(-1);
   const [evaluation, setEvaluation] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -93,13 +101,6 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     white: 0,
     black: 0
   });
-  const [moveRatingImpacts, setMoveRatingImpacts] = useState<{
-    white: number[];
-    black: number[];
-  }>({
-    white: [],
-    black: []
-  });
   const [moveByMoveRatings, setMoveByMoveRatings] = useState<{
     white: number[];
     black: number[];
@@ -108,9 +109,82 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     black: []
   });
   const [isPlayingThrough, setIsPlayingThrough] = useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1500);
-  const [moveAnalysis, setMoveAnalysis] = useState<any[]>([]);
+  const [playbackSpeed, ] = useState(1500);
+  const [moveAnalysis, setMoveAnalysis] = useState<MoveAnalysis[]>([]); 
   const [capturedPieces, setCapturedPieces] = useState<{ white: string[]; black: string[] }>({ white: [], black: [] });
+
+  const generateMoveEvaluations = useCallback((chessInstance: Chess) => {
+    const history = chessInstance.history({ verbose: true });
+    const evaluations: number[] = [0];
+    
+    const tempChess = new Chess();
+    let prevEval = 0;
+    
+    for (let i = 0; i < history.length; i++) {
+      const move = history[i];
+      tempChess.move({ from: move.from, to: move.to, promotion: move.promotion });
+      
+      const pieces = countPieces(tempChess);
+      
+      
+      let positionFactor = 0;
+      
+      const centralSquares: Square[] = ['d4', 'd5', 'e4', 'e5']; 
+      centralSquares.forEach(square => {
+        const piece = tempChess.get(square); 
+        if (piece) {
+          positionFactor += piece.color === 'w' ? 0.15 : -0.15;
+        }
+      });
+      
+      
+      if (pieces.w.b >= 2) positionFactor += 0.5;
+      if (pieces.b.b >= 2) positionFactor -= 0.5;
+      
+      
+      const wKingSquare = findKing(tempChess, 'w');
+      const bKingSquare = findKing(tempChess, 'b');
+      
+      
+      if (wKingSquare) {
+        const wKingFile = wKingSquare.charCodeAt(0) - 97;
+        if ((wKingFile === 6 || wKingFile === 7) && pieces.w.p >= 3) {
+          positionFactor += 0.4;
+        }
+      }
+      
+      if (bKingSquare) {
+        const bKingFile = bKingSquare.charCodeAt(0) - 97;
+        if ((bKingFile === 6 || bKingFile === 7) && pieces.b.p >= 3) {
+          positionFactor -= 0.4;
+        }
+      }
+      
+      
+      const materialEval = 
+        pieces.w.p - pieces.b.p + 
+        3 * (pieces.w.n - pieces.b.n) + 
+        3.25 * (pieces.w.b - pieces.b.b) + 
+        5 * (pieces.w.r - pieces.b.r) + 
+        9 * (pieces.w.q - pieces.b.q);
+      
+      
+      const noiseFactor = (Math.random() * 0.2) - 0.1;
+      
+      
+      const tempoFactor = tempChess.turn() === 'w' ? 0.1 : -0.1;
+      
+      const evaluation = materialEval + positionFactor + noiseFactor + tempoFactor;
+      
+      
+      const smoothedEval = prevEval * 0.2 + evaluation * 0.8;
+      prevEval = smoothedEval;
+      
+      evaluations.push(smoothedEval);
+    }
+    
+    return evaluations;
+  }, []);
 
   useEffect(() => {
     if (isOpen && game) {
@@ -121,16 +195,16 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
           console.log("Loading PGN:", game.pgn.substring(0, 100) + "...");
           
           try {
-            // First try to load using the built-in PGN method
+            
             chessInstance.loadPgn(game.pgn);
             console.log("PGN loaded successfully using standard method");
           } catch (pgnError) {
             console.error("Error loading PGN with standard method:", pgnError);
             
-            // Manual PGN parsing fallback
+            
             console.log("Attempting manual PGN parsing as fallback...");
             try {
-              // Extract moves using regex
+              
               const moveRegex = /\d+\.\s+(\S+)\s+(?:(\S+)\s+)?/g;
               let match;
               const moves = [];
@@ -142,7 +216,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
               
               console.log("Extracted moves:", moves);
               
-              // Apply moves manually
+              
               chessInstance.reset();
               for (const move of moves) {
                 try {
@@ -167,17 +241,20 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
         }
         
         setChess(chessInstance);
+
+
         
-        // Get detailed verbose history with all move information
+        
+        
         const history = chessInstance.history({ verbose: true });
         console.log("Full move history:", history);
         
-        // Debug check for issues with knight moves
+        
         const knightMoves = history.filter(m => m.piece?.toLowerCase() === 'n');
         console.log("Knight moves in the game:", knightMoves);
         
-        // Check for potential issues with knights moving to the same square
-        const knightDestinations: Record<string, any> = {};
+        
+        const knightDestinations: Record<string, Move> = {}; 
         for (let i = 0; i < knightMoves.length; i++) {
           const move = knightMoves[i];
           if (knightDestinations[move.to as string]) {
@@ -195,7 +272,6 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
         const qualities = calculateMoveQualities(evals, chessInstance, game);
         setMoveQuality(qualities.moveQuality);
         setAccuracies(qualities.accuracies);
-        setMoveRatingImpacts(qualities.moveRatingImpacts);
         setMoveByMoveRatings(qualities.moveByMoveRatings);
         
         setCurrentMoveIndex(-1);
@@ -206,80 +282,9 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
         toast.error("Error loading chess game");
       }
     }
-  }, [game, isOpen]);
+  }, [game, isOpen, generateMoveEvaluations]);
 
-  const generateMoveEvaluations = (chessInstance: Chess) => {
-    const history = chessInstance.history({ verbose: true });
-    const evaluations: number[] = [0];
-    
-    const tempChess = new Chess();
-    let prevEval = 0;
-    
-    for (let i = 0; i < history.length; i++) {
-      const move = history[i];
-      tempChess.move({ from: move.from, to: move.to, promotion: move.promotion });
-      
-      const pieces = countPieces(tempChess);
-      
-      // Calculate position value based on control of the center
-      let positionFactor = 0;
-      
-      const centralSquares = ['d4', 'd5', 'e4', 'e5'];
-      centralSquares.forEach(square => {
-        const piece = tempChess.get(square as any);
-        if (piece) {
-          positionFactor += piece.color === 'w' ? 0.15 : -0.15;
-        }
-      });
-      
-      // Bishop pair bonus
-      if (pieces.w.b >= 2) positionFactor += 0.5;
-      if (pieces.b.b >= 2) positionFactor -= 0.5;
-      
-      // King safety factor
-      const wKingSquare = findKing(tempChess, 'w');
-      const bKingSquare = findKing(tempChess, 'b');
-      
-      // Kingside castling bonus
-      if (wKingSquare) {
-        const wKingFile = wKingSquare.charCodeAt(0) - 97;
-        if ((wKingFile === 6 || wKingFile === 7) && pieces.w.p >= 3) {
-          positionFactor += 0.4;
-        }
-      }
-      
-      if (bKingSquare) {
-        const bKingFile = bKingSquare.charCodeAt(0) - 97;
-        if ((bKingFile === 6 || bKingFile === 7) && pieces.b.p >= 3) {
-          positionFactor -= 0.4;
-        }
-      }
-      
-      // Material evaluation with piece-square tables influence
-      const materialEval = 
-        pieces.w.p - pieces.b.p + 
-        3 * (pieces.w.n - pieces.b.n) + 
-        3.25 * (pieces.w.b - pieces.b.b) + 
-        5 * (pieces.w.r - pieces.b.r) + 
-        9 * (pieces.w.q - pieces.b.q);
-      
-      // Small random noise to simulate small cp differences in engine evaluations
-      const noiseFactor = (Math.random() * 0.2) - 0.1;
-      
-      // Tempo factor
-      const tempoFactor = tempChess.turn() === 'w' ? 0.1 : -0.1;
-      
-      const evaluation = materialEval + positionFactor + noiseFactor + tempoFactor;
-      
-      // Smooth evaluation changes to avoid radical jumps
-      const smoothedEval = prevEval * 0.2 + evaluation * 0.8;
-      prevEval = smoothedEval;
-      
-      evaluations.push(smoothedEval);
-    }
-    
-    return evaluations;
-  };
+
 
   const calculateMoveQualities = (evaluations: number[], chessInstance: Chess, game: GameData) => {
     const history = chessInstance.history({ verbose: true });
@@ -325,15 +330,15 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     
     const tempChess = new Chess();
     
-    // Base ratings from game
+    
     const whiteBaseRating = game?.white?.rating || 1500;
     const blackBaseRating = game?.black?.rating || 1500;
     
     let currentWhiteRating = whiteBaseRating;
     let currentBlackRating = blackBaseRating;
     
-    // Create an array to collect all move analyses before setting state
-    const allMoveAnalyses: any[] = [];
+    
+    const allMoveAnalyses: MoveAnalysis[] = []; 
     
     for (let i = 0; i < history.length; i++) {
       const color = i % 2 === 0 ? 'white' : 'black';
@@ -341,7 +346,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
       const prevEval = evaluations[i];
       const currentEval = evaluations[i + 1];
       
-      // Calculate evaluation change
+      
       let evalChange;
       
       if (color === 'white') {
@@ -353,7 +358,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
       let moveAccuracy;
       let ratingMultiplier;
       
-      // Classify the move based on the evaluation change
+      
       if (evalChange >= MOVE_CLASSIFICATIONS.BRILLIANT.threshold) {
         moveQuality[color].brilliant++;
         moveAccuracy = 100;
@@ -388,24 +393,24 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
         ratingMultiplier = MOVE_CLASSIFICATIONS.BLUNDER.multiplier;
       }
       
-      // Update move-by-move ratings
+      
       const baseRating = color === 'white' ? whiteBaseRating : blackBaseRating;
       
-      // Calculate rating impact with diminishing effect over time
+      
       const ratingChange = (baseRating * ratingMultiplier - baseRating) * 0.7;
       
       if (color === 'white') {
-        // Update accuracy and move counts
+        
         whiteAccuracySum += moveAccuracy;
         whiteMoveCount++;
         
-        // Store the rating multiplier for this move
+        
         moveRatingImpacts.white.push(ratingMultiplier);
         
-        // Update the current estimated rating based on the move
+        
         currentWhiteRating = currentWhiteRating * 0.7 + (baseRating + ratingChange) * 0.3;
         
-        // Add to the move-by-move ratings
+        
         moveByMoveRatings.white.push(Math.round(currentWhiteRating) || baseRating);
       } else {
         blackAccuracySum += moveAccuracy;
@@ -418,7 +423,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
       
       tempChess.move({ from: move.from, to: move.to, promotion: move.promotion });
       
-      // Build move analysis
+      
       const qualityLabel = evalChange >= MOVE_CLASSIFICATIONS.BRILLIANT.threshold ? "Brilliant" :
                          evalChange >= MOVE_CLASSIFICATIONS.GREAT.threshold ? "Great" :
                          evalChange >= MOVE_CLASSIFICATIONS.BEST.threshold ? "Best" :
@@ -427,11 +432,11 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
                          evalChange >= MOVE_CLASSIFICATIONS.INACCURACY.threshold ? "Inaccuracy" :
                          evalChange >= MOVE_CLASSIFICATIONS.MISTAKE.threshold ? "Mistake" : "Blunder";
       
-      // Instead of calling setState inside the loop, collect the analyses
+      
       const moveNumber = Math.floor(i / 2) + 1;
       const moveText = `${moveNumber}${i % 2 === 0 ? "." : "..."}${move.san}`;
       
-      allMoveAnalyses[i] = {
+      allMoveAnalyses[i] = { 
         moveNumber,
         moveText,
         move: move.san,
@@ -446,10 +451,10 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
       };
     }
     
-    // Now set the state once with all analyses
+    
     setMoveAnalysis(allMoveAnalyses);
     
-    // Calculate overall accuracy (Chess.com style)
+    
     const whiteAccuracy = whiteMoveCount > 0 ? whiteAccuracySum / whiteMoveCount / 100 : 0;
     const blackAccuracy = blackMoveCount > 0 ? blackAccuracySum / blackMoveCount / 100 : 0;
     
@@ -459,24 +464,23 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
         white: whiteAccuracy,
         black: blackAccuracy
       },
-      moveRatingImpacts,
       moveByMoveRatings
     };
   };
 
-  const findKing = (chess: Chess, color: 'w' | 'b'): string => {
+  const findKing = (chess: Chess, color: 'w' | 'b'): Square => { 
     const board = chess.board();
     for (let i = 0; i < 8; i++) {
       for (let j = 0; j < 8; j++) {
         const piece = board[i][j];
         if (piece && piece.type === 'k' && piece.color === color) {
-          const squareNotation = String.fromCharCode(97 + j) + (8 - i);
+          const squareNotation = (String.fromCharCode(97 + j) + (8 - i)) as Square; 
           return squareNotation;
         }
       }
     }
-    // Fallback (should never happen in a valid chess position)
-    return 'e1';
+    
+    return 'e1'; 
   };
 
   const countPieces = (chess: Chess) => {
@@ -498,94 +502,12 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     return pieces;
   };
 
-  // Add state to track if we're currently navigating to prevent re-entrancy
-  const [isNavigating, setIsNavigating] = useState(false);
-  // Add lastActionTimestamp to prevent rapid re-navigation
-  const [lastActionTimestamp, setLastActionTimestamp] = useState(0);
-
-  const goToMove = useCallback((moveIndex: number) => {
-    // Prevent redundant navigation
-    if (currentMoveIndex === moveIndex || isNavigating) {
-      return;
-    }
-    
-    if (!chess) return;
-    
-    // Set navigating flag to prevent re-entrancy
-    setIsNavigating(true);
-    
-    // Minimal logging to avoid console spam
-    console.log(`Navigating to move ${moveIndex}`);
-    
-    try {
-      // Create a new chess instance from the starting position
-      const newChess = new Chess();
-      
-      if (moveIndex >= 0 && moveIndex < moveHistory.length) {
-        // Apply all moves up to the target index
-        for (let i = 0; i <= moveIndex; i++) {
-          const move = moveHistory[i];
-          const result = newChess.move({ 
-            from: move.from, 
-            to: move.to, 
-            promotion: move.promotion 
-          });
-          
-          if (!result) {
-            console.error(`Failed to apply move ${i}: ${move.san}`);
-            throw new Error(`Invalid move: ${move.san}`);
-          }
-        }
-      }
-      
-      // Update the chess instance and current move index
-      setChess(newChess);
-      setCurrentMoveIndex(moveIndex);
-      
-      // Update evaluation if available
-      if (moveIndex >= -1 && moveIndex < moveEvaluations.length) {
-        setEvaluation(moveEvaluations[moveIndex + 1]);
-      }
-      
-      // Update captured pieces
-      updateCapturedPieces(newChess.fen());
-    } catch (error) {
-      console.error("Error navigating to move:", error);
-      toast.error("Error navigating to this position");
-    } finally {
-      // Clear the navigating flag when done
-      setIsNavigating(false);
-    }
-  }, [chess, moveHistory, moveEvaluations, currentMoveIndex, isNavigating]);
-
-  // Helper function to find all positions of a specific piece type
-  const findPiecePositions = (chessInstance: Chess, pieceType: string) => {
-    const board = chessInstance.board();
-    const positions = [];
-    
-    for (let i = 0; i < 8; i++) {
-      for (let j = 0; j < 8; j++) {
-        const piece = board[i][j];
-        if (piece && piece.type === pieceType) {
-          const square = String.fromCharCode(97 + j) + (8 - i);
-          positions.push({
-            color: piece.color,
-            square: square,
-            notation: `${piece.color === 'w' ? 'N' : 'n'}${square}`
-          });
-        }
-      }
-    }
-    
-    return positions;
-  };
-
-  const updateCapturedPieces = (fen: string) => {
+  const updateCapturedPieces = useCallback((fen: string) => {
     try {
       const whiteCaptured: string[] = [];
       const blackCaptured: string[] = [];
 
-      // Calculate captured pieces by comparing the position with starting position
+      
       const currentPieces = getFenPieces(fen);
       const startingPieces = {
         p: 8, n: 2, b: 2, r: 2, q: 1, k: 1,
@@ -610,9 +532,71 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     } catch (error) {
       console.error("Error updating captured pieces:", error);
     }
-  };
+  }, []);
 
-  // Helper to get pieces from FEN
+  
+  const [isNavigating, setIsNavigating] = useState(false);
+  
+  const [lastActionTimestamp, setLastActionTimestamp] = useState(0);
+
+  const goToMove = useCallback((moveIndex: number) => {
+    
+    if (currentMoveIndex === moveIndex || isNavigating) {
+      return;
+    }
+    
+    if (!chess) return;
+    
+    
+    setIsNavigating(true);
+    
+    
+    console.log(`Navigating to move ${moveIndex}`);
+    
+    try {
+      
+      const newChess = new Chess();
+      
+      if (moveIndex >= 0 && moveIndex < moveHistory.length) {
+        
+        for (let i = 0; i <= moveIndex; i++) {
+          const move = moveHistory[i];
+          const result = newChess.move({ 
+            from: move.from, 
+            to: move.to, 
+            promotion: move.promotion 
+          });
+          
+          if (!result) {
+            console.error(`Failed to apply move ${i}: ${move.san}`);
+            throw new Error(`Invalid move: ${move.san}`);
+          }
+        }
+      }
+      
+      
+      setChess(newChess);
+      setCurrentMoveIndex(moveIndex);
+      
+      
+      if (moveIndex >= -1 && moveIndex < moveEvaluations.length) {
+        setEvaluation(moveEvaluations[moveIndex + 1]);
+      }
+      
+      
+      updateCapturedPieces(newChess.fen());
+    } catch (error) {
+      console.error("Error navigating to move:", error);
+      toast.error("Error navigating to this position");
+    } finally {
+      
+      setIsNavigating(false);
+    }
+  }, [chess, moveHistory, moveEvaluations, currentMoveIndex, isNavigating, updateCapturedPieces]);
+
+
+
+  
   const getFenPieces = (fen: string) => {
     const pieces: Record<string, number> = {};
     const position = fen.split(" ")[0];
@@ -626,7 +610,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     return pieces;
   };
 
-  // Helper to get HTML/Unicode piece symbols
+  
   const getPieceSymbol = (piece: string): string => {
     const symbols: Record<string, string> = {
       p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
@@ -635,9 +619,9 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     return symbols[piece] || piece;
   };
 
-  // Handle moving to next move with detailed logging
+  
   const handleNextMove = useCallback(() => {
-    // Prevent rapid re-firing by checking if enough time has passed (at least 200ms)
+    
     const now = Date.now();
     if (now - lastActionTimestamp < 200) {
       console.log("Throttling navigation - too soon after last action");
@@ -651,25 +635,25 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
       return;
     }
 
-    // Set timestamp for throttling
+    
     setLastActionTimestamp(now);
     
-    // Use minimal logging to avoid console clutter
+    
     console.log(`Moving forward from ${currentMoveIndex} to ${currentMoveIndex + 1}`);
     
     const nextMoveIndex = currentMoveIndex + 1;
-    // Don't call goToMove directly from handleNextMove during auto-play
+    
     if (isPlayingThrough) {
       setTimeout(() => {
         if (nextMoveIndex < moveHistory.length) {
-          // Use direct state updates instead of goToMove
+          
           setIsNavigating(true);
           
           try {
-            // Create a new chess instance from the starting position
+            
             const newChess = new Chess();
             
-            // Apply all moves up to the target index
+            
             for (let i = 0; i <= nextMoveIndex; i++) {
               const move = moveHistory[i];
               newChess.move({ 
@@ -679,19 +663,19 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
               });
             }
             
-            // Update the state directly
+            
             setChess(newChess);
             setCurrentMoveIndex(nextMoveIndex);
             
-            // Update evaluation if available
+            
             if (nextMoveIndex >= -1 && nextMoveIndex < moveEvaluations.length) {
               setEvaluation(moveEvaluations[nextMoveIndex + 1]);
             }
             
-            // Update captured pieces
+            
             updateCapturedPieces(newChess.fen());
             
-            // Check if we should continue auto-play
+            
             if (nextMoveIndex < moveHistory.length - 1) {
               setTimeout(() => {
                 handleNextMove();
@@ -708,16 +692,16 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
         } else {
           setIsPlayingThrough(false);
         }
-      }, 50); // Short delay before starting move
+      }, 50); 
     } else {
-      // For manual navigation, we'll use goToMove
+      
       goToMove(nextMoveIndex);
     }
-  }, [chess, moveHistory, currentMoveIndex, isPlayingThrough, moveEvaluations, playbackSpeed, isNavigating, lastActionTimestamp]);
+  }, [chess, moveHistory, currentMoveIndex, isPlayingThrough, moveEvaluations, playbackSpeed, isNavigating, lastActionTimestamp, goToMove, updateCapturedPieces]);
   
-  // Handle moving to previous move with logging
+  
   const handlePrevMove = useCallback(() => {
-    // Throttling to prevent rapid clicks
+    
     const now = Date.now();
     if (now - lastActionTimestamp < 200) {
       return;
@@ -725,16 +709,16 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     
     if (!chess || currentMoveIndex <= -1 || isNavigating) return;
     
-    // Set timestamp for throttling
+    
     setLastActionTimestamp(now);
     
-    // Minimal logging
+    
     console.log(`Moving backward from ${currentMoveIndex} to ${currentMoveIndex - 1} ===`);
     
     goToMove(currentMoveIndex - 1);
   }, [chess, currentMoveIndex, goToMove, isNavigating, lastActionTimestamp]);
 
-  // Handle moving to first move
+  
   const handleFirstMove = useCallback(() => {
     const now = Date.now();
     if (now - lastActionTimestamp < 200 || !chess || isNavigating) return;
@@ -743,7 +727,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     goToMove(-1);
   }, [chess, goToMove, isNavigating, lastActionTimestamp]);
 
-  // Handle moving to last move
+  
   const handleLastMove = useCallback(() => {
     const now = Date.now();
     if (now - lastActionTimestamp < 200 || !chess || !moveHistory.length || isNavigating) return;
@@ -752,7 +736,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     goToMove(moveHistory.length - 1);
   }, [chess, moveHistory, goToMove, isNavigating, lastActionTimestamp]);
 
-  // Handle play-through mode
+  
   const handlePlayThrough = useCallback(() => {
     const now = Date.now();
     if (now - lastActionTimestamp < 200 || isNavigating) return;
@@ -762,23 +746,23 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     handleNextMove();
   }, [handleNextMove, isNavigating, lastActionTimestamp]);
 
-  // Handle stopping play-through mode
+  
   const handleStopPlayThrough = useCallback(() => {
     setIsPlayingThrough(false);
   }, []);
   
-  // Simplified debugging useEffect to not cause extra re-renders
+  
   useEffect(() => {
-    // Only do minimal logging for actual knight positions
-    // Remove the elaborate logging that could trigger extra renders
-    if (chess && currentMoveIndex >= 0 && false) { // disabled with false flag
-      // Simplified logging that doesn't cause side effects
-      const fen = chess?.fen(); // Add optional chaining to prevent null error
+    
+    
+    if (chess && currentMoveIndex >= 0 && false) { 
+      
+      const fen = chess?.fen(); 
       console.debug(`Current position at move ${currentMoveIndex}: ${fen}`);
     }
   }, [chess, currentMoveIndex]);
 
-  // Download PGN with analysis
+  
   const downloadPGN = () => {
     if (!game?.pgn) {
       toast.error("No PGN available to download");
@@ -786,21 +770,21 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     }
 
     try {
-      // Create enhanced PGN with analysis comments
+      
       let enhancedPGN = game.pgn;
 
-      // Add analysis comments to each move
+      
       moveAnalysis.forEach((analysis) => {
         if (!analysis) return;
 
         const moveComment = `{${analysis.quality} (${analysis.evaluation > 0 ? "+" : ""}${analysis.evaluation.toFixed(2)}).}`;
 
-        // Simple regex to find the move in the PGN and add the comment
+        
         const movePattern = new RegExp(`(${analysis.moveText.replace(".", "\\.").replace("+", "\\+")})\\s`, "g");
         enhancedPGN = enhancedPGN.replace(movePattern, `$1 ${moveComment} `);
       });
 
-      // Add accuracy scores to PGN headers
+      
       const whiteAccuracy = accuracies.white ? Math.round(accuracies.white * 100) : 0;
       const blackAccuracy = accuracies.black ? Math.round(accuracies.black * 100) : 0;
 
@@ -809,7 +793,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
         `[WhiteAccuracy "${whiteAccuracy}%"]\n[BlackAccuracy "${blackAccuracy}%"]\n[AnalysisEngine "ChessAI v1.0"]\n[AnalysisDate "${new Date().toISOString()}"]\n[Event `
       );
 
-      // Create download link
+      
       const blob = new Blob([enhancedPGN], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -827,39 +811,39 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
     }
   };
 
-  // Get current estimated ratings for each player
+  
   const getCurrentMoveEstimatedRating = (color: 'white' | 'black') => {
     const ratings = color === 'white' ? moveByMoveRatings.white : moveByMoveRatings.black;
     
-    // If we're at the starting position
+    
     if (currentMoveIndex === -1) {
       return color === 'white' ? game.white?.rating || 0 : game.black?.rating || 0;
     }
     
-    // Calculate the move index for the specific color
+    
     let colorMoveIndex = Math.floor(currentMoveIndex / 2);
     
-    // For black, if it's white's move, we need the previous black move
+    
     if (color === 'black' && currentMoveIndex % 2 === 0) {
       colorMoveIndex--;
     }
     
-    // For white, if it's black's move, we need the last white move
+    
     if (color === 'white' && currentMoveIndex % 2 === 1) {
-      // No adjustment needed, colorMoveIndex is correct
+      
     }
     
     if (colorMoveIndex < 0 || colorMoveIndex >= ratings.length) {
       return color === 'white' ? game.white?.rating || 0 : game.black?.rating || 0;
     }
     
-    return ratings[colorMoveIndex] || 0;  // Provide default value of 0 when undefined
+    return ratings[colorMoveIndex] || 0;  
   };
 
   const whiteCurrentRating = getCurrentMoveEstimatedRating('white');
   const blackCurrentRating = getCurrentMoveEstimatedRating('black');
 
-  // Function to get move quality class
+  
   const getMoveQualityClass = (quality: string): string => {
     switch (quality) {
       case "Brilliant": return "text-purple-400";
@@ -1053,8 +1037,8 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
             blackAccuracy={accuracies.black}
             moveQuality={moveQuality}
             estimatedPerformance={{
-              white: whiteCurrentRating || 0,  // Provide default value of 0 when undefined
-              black: blackCurrentRating || 0   // Provide default value of 0 when undefined
+              white: whiteCurrentRating || 0,  
+              black: blackCurrentRating || 0   
             }}
             currentMoveIndex={currentMoveIndex}
           />
@@ -1101,7 +1085,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
                       </tr>
                     </thead>
                     <tbody>
-                      {moveAnalysis.map((analysis, index) => analysis && (
+                      {moveAnalysis.map((analysis: MoveAnalysis | null, index) => analysis && ( 
                         <tr 
                           key={index} 
                           className="border-b hover:bg-gray-50 cursor-pointer"
@@ -1142,16 +1126,16 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
                     <h3 className="font-bold mb-2">Critical Moments</h3>
-                    {moveAnalysis.filter(m => m?.quality === 'Blunder' || m?.quality === 'Brilliant').length > 0 ? (
+                    {moveAnalysis.filter((m): m is MoveAnalysis => !!m && (m.quality === 'Blunder' || m.quality === 'Brilliant')).length > 0 ? ( 
                       <div className="space-y-2">
                         {moveAnalysis
-                          .filter(m => m?.quality === 'Blunder' || m?.quality === 'Brilliant')
+                          .filter((m): m is MoveAnalysis => !!m && (m.quality === 'Blunder' || m.quality === 'Brilliant')) 
                           .slice(0, 3)
                           .map((analysis, i) => (
                             <div 
                               key={i} 
                               className="p-2 border rounded hover:bg-gray-50 cursor-pointer"
-                              onClick={() => goToMove(moveAnalysis.indexOf(analysis))}
+                              onClick={() => goToMove(moveAnalysis.findIndex(ma => ma === analysis))} 
                             >
                               <div className="flex justify-between">
                                 <span>{analysis.moveText}</span>
@@ -1179,10 +1163,10 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
                         <span>Best Moves:</span>
                         <span className="font-medium text-green-500">
                           {
-                            moveAnalysis.filter(m => 
-                              m?.quality === 'Best' || 
-                              m?.quality === 'Brilliant' || 
-                              m?.quality === 'Great'
+                            moveAnalysis.filter((m): m is MoveAnalysis => 
+                              !!m && (m.quality === 'Best' || 
+                              m.quality === 'Brilliant' || 
+                              m.quality === 'Great')
                             ).length
                           }
                         </span>
@@ -1191,9 +1175,9 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
                         <span>Good Moves:</span>
                         <span className="font-medium text-blue-500">
                           {
-                            moveAnalysis.filter(m => 
-                              m?.quality === 'Good' || 
-                              m?.quality === 'Excellent'
+                            moveAnalysis.filter((m): m is MoveAnalysis => 
+                              !!m && (m.quality === 'Good' || 
+                              m.quality === 'Excellent')
                             ).length
                           }
                         </span>
@@ -1202,9 +1186,9 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
                         <span>Inaccuracies/Mistakes:</span>
                         <span className="font-medium text-yellow-500">
                           {
-                            moveAnalysis.filter(m => 
-                              m?.quality === 'Inaccuracy' || 
-                              m?.quality === 'Mistake'
+                            moveAnalysis.filter((m): m is MoveAnalysis => 
+                              !!m && (m.quality === 'Inaccuracy' || 
+                              m.quality === 'Mistake')
                             ).length
                           }
                         </span>
@@ -1212,7 +1196,7 @@ const GameReview = ({ game, username, isOpen = true, onClose }: GameReviewProps)
                       <div className="flex justify-between">
                         <span>Blunders:</span>
                         <span className="font-medium text-red-500">
-                          {moveAnalysis.filter(m => m?.quality === 'Blunder').length}
+                          {moveAnalysis.filter((m): m is MoveAnalysis => !!m && m.quality === 'Blunder').length} 
                         </span>
                       </div>
                     </div>
