@@ -352,16 +352,6 @@ export default function Dashboard() {
     return match && match[7].length === 11 ? match[7] : false
   }
 
-  const fetchNotifications = useCallback(async () => {
-    const { data } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("read", false)
-      .order("created_at", { ascending: false })
-      
-    // Handle the notifications data as needed
-    return data;
-  }, [supabase])
 
   const handleVote = async (pollId: string, optionKey: string) => {
     try {
@@ -502,26 +492,37 @@ export default function Dashboard() {
   }, [supabase])
 
   // Handler to start reviewing a game with proper error handling
-// Handler to start reviewing a game with proper error handling
-const handleReviewGame = (game: GameData) => {
-  try {
-    // Extract game ID from URL
-    const gameId = game.url.split('/').pop()
-    
-    if (!gameId) {
-      toast.error("Could not determine game ID")
-      return
+  const handleReviewGame = (game: GameData) => {
+    console.log("handleReviewGame called with game:", game); // Log input game data
+    try {
+      // Extract game ID from URL
+      const gameId = game.url?.split('/').pop(); // Add optional chaining for safety
+      console.log("Extracted gameId:", gameId); // Log gameId
+
+      if (!gameId) {
+        toast.error("Could not determine game ID from URL: " + game.url);
+        console.error("Could not determine game ID from URL:", game.url);
+        return;
+      }
+
+      // Check if username is available
+      if (!username) {
+          toast.error("Username not available for review link.");
+          console.error("Username is empty, cannot create review link.");
+          return;
+      }
+      console.log("Using username:", username); // Log username
+
+      // Navigate to review page in same tab with query parameters and username
+      const reviewUrl = `/review?gameId=${gameId}&playerColor=${game.playerColor}&username=${username}`;
+      console.log("Navigating to reviewUrl:", reviewUrl); // Log the final URL
+      router.push(reviewUrl);
+      toast.info("Navigating to game review..."); // Use info level toast
+    } catch (error) {
+      console.error("Error opening game review:", error);
+      toast.error("Failed to open game review");
     }
-    
-    // Navigate to review page in same tab with query parameters and username
-    const reviewUrl = `/review?gameId=${gameId}&playerColor=${game.playerColor}&username=${username}`
-    router.push(reviewUrl)
-    toast.success("Loading game review...")
-  } catch (error) {
-    console.error("Error opening game review:", error)
-    toast.error("Failed to open game review")
-  }
-}
+  };
 
   useEffect(() => {
     const videoId = getYouTubeVideoId(LATEST_CLASS_URL)
@@ -554,44 +555,22 @@ const handleReviewGame = (game: GameData) => {
       // Handle case where profile exists but chessUsername doesn't, if necessary
       setLoading(false); // Stop loading if no username to fetch data for
     }
-    // Add fetchActivePolls to dependencies if it should re-run when profile changes
-  }, [userProfile?.chessUsername, fetchStats, fetchClassProgress, fetchRecentGames, fetchActivePolls]);
-
-  useEffect(() => {
-    fetchNotifications()
-    // Set up real-time subscription for new notifications
-    const channel = supabase
-      .channel("public:notifications")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "notifications",
-        },
-        () => {
-          fetchNotifications()
-        },
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [fetchNotifications, supabase])
+    // Remove callback functions from dependency array if they are stable
+    // and the effect should only re-run based on username change.
+  }, [userProfile?.chessUsername]); // Keep only the primary trigger
 
   useEffect(() => {
     fetchActivePolls()
     // Set up realtime subscription for polls
     const channel = supabase
       .channel("polls_changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "polls" }, () => fetchActivePolls())
+      .on("postgres_changes", { event: "*", schema: "public", table: "polls" }, fetchActivePolls) // Pass function reference
       .subscribe()
 
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [fetchActivePolls, supabase])
+  }, [fetchActivePolls, supabase]); // Keep fetchActivePolls here if it should re-run subscription on change
 
   if (loading && !stats) {
     return (

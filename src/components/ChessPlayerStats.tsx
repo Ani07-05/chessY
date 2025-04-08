@@ -1,6 +1,24 @@
+// components/ChessPlayerStats.tsx (or relevant path)
+import React from 'react';
 import { Star, Award, TrendingUp, Circle, Sparkles, Check, Square, AlertCircle, XCircle } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Progress } from "@/components/ui/progress";
+
+// Define structure for move quality counts
+// Exporting allows GameReview to use the same type definition potentially
+export interface MoveQualityCounts {
+  brilliant: number;
+  great: number;
+  best: number;
+  excellent: number;
+  good: number;
+  inaccuracy: number;
+  mistake: number;
+  blunder: number;
+  book: number;
+  // Add total if GameReview's derive function includes it and you want to use it here
+  total?: number; // Make total optional or ensure deriveMoveQualityCounts always returns it
+}
 
 interface ChessPlayerStatsProps {
   whiteUsername: string;
@@ -9,35 +27,14 @@ interface ChessPlayerStatsProps {
   blackRating?: number;
   whiteAccuracy?: number;
   blackAccuracy?: number;
-  moveQuality?: {
-    white: {
-      brilliant: number;
-      great: number;
-      best: number;
-      excellent: number;
-      good: number;
-      inaccuracy: number;
-      mistake: number;
-      blunder: number;
-      book: number;
-    };
-    black: {
-      brilliant: number;
-      great: number;
-      best: number;
-      excellent: number;
-      good: number;
-      inaccuracy: number;
-      mistake: number;
-      blunder: number;
-      book: number;
-    };
+  moveQuality?: { // Prop is optional
+    white: MoveQualityCounts;
+    black: MoveQualityCounts;
   };
   estimatedPerformance?: {
     white: number;
     black: number;
   };
-  currentMoveIndex?: number;
 }
 
 const ChessPlayerStats: React.FC<ChessPlayerStatsProps> = ({
@@ -47,292 +44,147 @@ const ChessPlayerStats: React.FC<ChessPlayerStatsProps> = ({
   blackRating,
   whiteAccuracy,
   blackAccuracy,
-  moveQuality,
+  moveQuality, // Can be undefined
   estimatedPerformance,
-  currentMoveIndex = -1
 }) => {
+
+  // Function to render move quality bars
   const renderMoveQualityBars = (color: 'white' | 'black') => {
-    if (!moveQuality) return null;
-    
+    // Handles case where moveQuality or specific color data is missing
+    if (!moveQuality?.[color]) return null;
+
     const quality = moveQuality[color];
-    const totalMoves = Object.values(quality).reduce((a, b) => a + b, 0) || 1;
-    
+    // Use optional chaining and nullish coalescing for safety
+    const totalMoves = quality.total ?? Object.values(quality).reduce((a, b) => a + b, 0);
+
+    // Return early if no moves to analyze
+    if (!totalMoves || totalMoves <= 0) {
+        return <div className="text-xs text-gray-500 mt-2">No moves to analyze for quality breakdown.</div>;
+    }
+
+    // Helper for rendering individual bar
+    const renderBar = (label: string, value: number, Icon: React.ElementType, colorClass: string, bgColor: string, strokeColor?: string) => {
+        if (value <= 0) return null;
+        const percentage = (value / totalMoves) * 100;
+        const iconProps = {
+            className: `h-3 w-3 mr-1 ${strokeColor ? `stroke-${strokeColor}` : ''} ${!strokeColor ? `fill-${colorClass} stroke-${colorClass}` : 'fill-transparent'}`, // Dynamic fill/stroke
+        };
+        return (
+            <div className="flex items-center text-xs">
+                <div className={`w-20 ${colorClass} flex items-center shrink-0`}>
+                    <Icon {...iconProps} /> {label}
+                </div>
+                <div className="flex-1 mx-1">
+                    <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
+                        <div className={`h-full ${bgColor}`} style={{ width: `${percentage}%` }} />
+                    </div>
+                </div>
+                <div className="w-8 text-right shrink-0">{value}</div>
+            </div>
+        );
+    };
+
+
     return (
       <div className="mt-2 space-y-1">
         <div className="text-xs text-gray-400 mb-1">Move Quality</div>
-        
-        {/* Brilliant moves */}
-        {quality.brilliant > 0 && (
-          <div className="flex items-center text-xs">
-            <div className="w-20 text-purple-400 flex items-center">
-              <Sparkles className="h-3 w-3 mr-1 fill-purple-400 stroke-purple-400" /> Brilliant
-            </div>
-            <div className="flex-1">
-              <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-purple-500" 
-                  style={{width: `${(quality.brilliant / totalMoves) * 100}%`}}
-                />
-              </div>
-            </div>
-            <div className="w-8 text-right">{quality.brilliant}</div>
-          </div>
-        )}
-        
-        {/* Great moves */}
-        {quality.great > 0 && (
-          <div className="flex items-center text-xs">
-            <div className="w-20 text-blue-400 flex items-center">
-              <Star className="h-3 w-3 mr-1 fill-blue-400 stroke-blue-400" /> Great
-            </div>
-            <div className="flex-1">
-              <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-blue-500" 
-                  style={{width: `${(quality.great / totalMoves) * 100}%`}}
-                />
-              </div>
-            </div>
-            <div className="w-8 text-right">{quality.great}</div>
-          </div>
-        )}
-
-        {/* Best moves */}
-        {quality.best > 0 && (
-          <div className="flex items-center text-xs">
-            <div className="w-20 text-lime-400 flex items-center">
-              <Star className="h-3 w-3 mr-1 fill-lime-400 stroke-lime-400" /> Best
-            </div>
-            <div className="flex-1">
-              <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-lime-500" 
-                  style={{width: `${(quality.best / totalMoves) * 100}%`}}
-                />
-              </div>
-            </div>
-            <div className="w-8 text-right">{quality.best}</div>
-          </div>
-        )}
-        
-        {/* Excellent moves */}
-        {quality.excellent > 0 && (
-          <div className="flex items-center text-xs">
-            <div className="w-20 text-green-400 flex items-center">
-              <Circle className="h-3 w-3 mr-1 fill-green-400 stroke-green-400" /> Excellent
-            </div>
-            <div className="flex-1">
-              <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-green-500" 
-                  style={{width: `${(quality.excellent / totalMoves) * 100}%`}}
-                />
-              </div>
-            </div>
-            <div className="w-8 text-right">{quality.excellent}</div>
-          </div>
-        )}
-        
-        {/* Good moves */}
-        {quality.good > 0 && (
-          <div className="flex items-center text-xs">
-            <div className="w-20 text-emerald-400 flex items-center">
-              <Check className="h-3 w-3 mr-1 stroke-emerald-400" /> Good
-            </div>
-            <div className="flex-1">
-              <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-emerald-500" 
-                  style={{width: `${(quality.good / totalMoves) * 100}%`}}
-                />
-              </div>
-            </div>
-            <div className="w-8 text-right">{quality.good}</div>
-          </div>
-        )}
-        
-        {/* Book moves */}
-        {quality.book > 0 && (
-          <div className="flex items-center text-xs">
-            <div className="w-20 text-blue-400 flex items-center">
-              <Square className="h-3 w-3 mr-1 fill-transparent stroke-blue-400" /> Book
-            </div>
-            <div className="flex-1">
-              <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-blue-500" 
-                  style={{width: `${(quality.book / totalMoves) * 100}%`}}
-                />
-              </div>
-            </div>
-            <div className="w-8 text-right">{quality.book}</div>
-          </div>
-        )}
-        
-        {/* Inaccuracies */}
-        {quality.inaccuracy > 0 && (
-          <div className="flex items-center text-xs">
-            <div className="w-20 text-yellow-400 flex items-center">
-              <AlertCircle className="h-3 w-3 mr-1 fill-transparent stroke-yellow-400" /> Inaccuracy
-            </div>
-            <div className="flex-1">
-              <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-yellow-500" 
-                  style={{width: `${(quality.inaccuracy / totalMoves) * 100}%`}}
-                />
-              </div>
-            </div>
-            <div className="w-8 text-right">{quality.inaccuracy}</div>
-          </div>
-        )}
-        
-        {/* Mistakes */}
-        {quality.mistake > 0 && (
-          <div className="flex items-center text-xs">
-            <div className="w-20 text-orange-400 flex items-center">
-              <XCircle className="h-3 w-3 mr-1 fill-transparent stroke-orange-400" /> Mistake
-            </div>
-            <div className="flex-1">
-              <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-orange-500" 
-                  style={{width: `${(quality.mistake / totalMoves) * 100}%`}}
-                />
-              </div>
-            </div>
-            <div className="w-8 text-right">{quality.mistake}</div>
-          </div>
-        )}
-        
-        {/* Blunders */}
-        {quality.blunder > 0 && (
-          <div className="flex items-center text-xs">
-            <div className="w-20 text-red-400 flex items-center">
-              <XCircle className="h-3 w-3 mr-1 fill-red-400 stroke-red-400" /> Blunder
-            </div>
-            <div className="flex-1">
-              <div className="w-full h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-red-500" 
-                  style={{width: `${(quality.blunder / totalMoves) * 100}%`}}
-                />
-              </div>
-            </div>
-            <div className="w-8 text-right">{quality.blunder}</div>
-          </div>
-        )}
+        {renderBar("Brilliant", quality.brilliant, Sparkles, "text-purple-400", "bg-purple-500")}
+        {renderBar("Great", quality.great, Star, "text-indigo-400", "bg-indigo-500")}
+        {renderBar("Best", quality.best, Star, "text-green-400", "bg-green-500")}
+        {renderBar("Excellent", quality.excellent, Circle, "text-blue-400", "bg-blue-500")}
+        {renderBar("Good", quality.good, Check, "text-sky-400", "bg-sky-500", "sky-400")}
+        {renderBar("Book", quality.book, Square, "text-gray-400", "bg-gray-500", "gray-400")}
+        {renderBar("Inaccuracy", quality.inaccuracy, AlertCircle, "text-yellow-400", "bg-yellow-500", "yellow-400")}
+        {renderBar("Mistake", quality.mistake, XCircle, "text-orange-400", "bg-orange-500", "orange-400")}
+        {renderBar("Blunder", quality.blunder, XCircle, "text-red-400", "bg-red-500", "red-400")}
       </div>
     );
   };
 
-  // Function to determine if the performance is better or worse than base rating
-  const getPerformanceChange = (baseRating: number | undefined, currentRating: number) => {
-    if (!baseRating) return { isHigher: false, difference: 0 };
-    
-    const difference = currentRating - baseRating;
-    return { 
-      isHigher: difference > 0,
-      difference: Math.abs(difference)
-    };
+  // Function to calculate performance change
+  const getPerformanceChange = (baseRating: number | undefined, estimatedRating: number | undefined) => {
+    if (baseRating === undefined || estimatedRating === undefined) return { isHigher: false, difference: 0, sign: '' };
+    const difference = Math.round(estimatedRating - baseRating);
+    return { isHigher: difference >= 0, difference: Math.abs(difference), sign: difference >= 0 ? '+' : '-' };
   };
 
-  const whitePerformanceChange = getPerformanceChange(whiteRating, estimatedPerformance?.white || 0);
-  const blackPerformanceChange = getPerformanceChange(blackRating, estimatedPerformance?.black || 0);
-  
+  const whitePerformanceChange = getPerformanceChange(whiteRating, estimatedPerformance?.white);
+  const blackPerformanceChange = getPerformanceChange(blackRating, estimatedPerformance?.black);
+
   return (
-    <div className="bg-gray-900 rounded-md p-3 text-sm">
-      <h3 className="text-gray-400 uppercase text-xs font-medium mb-2 flex items-center">
-        <Award className="h-4 w-4 mr-1" /> Game Stats 
-        {currentMoveIndex > -1 && <span className="ml-auto text-blue-400">Move {currentMoveIndex + 1}</span>}
+    <div className="bg-card border rounded-md p-3 text-sm text-card-foreground"> {/* Use theme variables */}
+      <h3 className="text-muted-foreground uppercase text-xs font-medium mb-2 flex items-center">
+        <Award className="h-4 w-4 mr-1" /> Game Stats
       </h3>
-      
+
       {/* White player stats */}
-      <div className="mb-3 pb-3 border-b border-gray-800">
+      <div className="mb-3 pb-3 border-b"> {/* Use theme border */}
         <div className="flex justify-between items-center mb-1">
-          <div className="font-medium flex items-center">
-            <div className="w-3 h-3 bg-gray-200 rounded-full mr-2" />
+          <div className="font-medium flex items-center truncate"> {/* Added truncate */}
+            <div className="w-3 h-3 bg-gray-200 rounded-full mr-2 border border-gray-400 shrink-0"></div>
             {whiteUsername}
           </div>
-          {whiteRating && <div className="text-gray-400">{whiteRating}</div>}
+          {whiteRating !== undefined && <div className="text-muted-foreground">{whiteRating}</div>}
         </div>
-        
-        {whiteAccuracy !== undefined && (
+        {whiteAccuracy !== undefined && whiteAccuracy > 0 && (
           <div className="mt-2">
-            <div className="flex justify-between text-xs mb-1">
-              <span>Accuracy</span>
-              <span className="text-emerald-400">{Math.round(whiteAccuracy * 100)}%</span>
-            </div>
-            <Progress value={whiteAccuracy * 100} className="h-1" />
+            <div className="flex justify-between text-xs mb-1"><span>Accuracy</span><span className="text-emerald-500 font-medium">{whiteAccuracy.toFixed(1)}%</span></div>
+            {/* Remove indicatorClassName */}
+            <Progress value={whiteAccuracy} className="h-1 bg-emerald-500" /> {/* Use theme progress, apply color directly if needed */}
           </div>
         )}
-        
-        {renderMoveQualityBars('white')}
-        
-        {estimatedPerformance?.white && (
-          <TooltipProvider>
+        {estimatedPerformance?.white !== undefined && (
+          <TooltipProvider delayDuration={200}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="mt-2 flex items-center text-xs">
-                  <TrendingUp className={`h-3 w-3 mr-1 ${whitePerformanceChange.isHigher ? 'text-green-400' : 'text-red-400'}`} />
-                  <span className={whitePerformanceChange.isHigher ? 'text-green-400' : 'text-red-400'}>
-                    Est. Performance: {estimatedPerformance.white}
-                    {whitePerformanceChange.difference > 0 && (
-                      <span> ({whitePerformanceChange.isHigher ? '+' : '-'}{whitePerformanceChange.difference})</span>
-                    )}
+                <div className="mt-2 flex items-center text-xs cursor-default">
+                  <TrendingUp className={`h-3 w-3 mr-1 ${whitePerformanceChange.isHigher ? 'text-green-500' : 'text-red-500'}`} />
+                  <span className={whitePerformanceChange.isHigher ? 'text-green-500' : 'text-red-500'}>
+                    Est. Perf: {Math.round(estimatedPerformance.white)}
+                    {whitePerformanceChange.difference > 0 && whiteRating !== undefined && (<span className="ml-1">({whitePerformanceChange.sign}{whitePerformanceChange.difference})</span>)}
                   </span>
                 </div>
               </TooltipTrigger>
-              <TooltipContent>
-                <p>Estimated rating performance based on move quality at current position</p>
-              </TooltipContent>
+              <TooltipContent><p>Estimated rating based on game performance.</p></TooltipContent>
             </Tooltip>
           </TooltipProvider>
         )}
+        {renderMoveQualityBars('white')}
       </div>
-      
+
       {/* Black player stats */}
       <div>
         <div className="flex justify-between items-center mb-1">
-          <div className="font-medium flex items-center">
-            <div className="w-3 h-3 bg-gray-800 border border-gray-700 rounded-full mr-2" />
+          <div className="font-medium flex items-center truncate"> {/* Added truncate */}
+            <div className="w-3 h-3 bg-gray-800 border border-gray-700 rounded-full mr-2 shrink-0"></div>
             {blackUsername}
           </div>
-          {blackRating && <div className="text-gray-400">{blackRating}</div>}
+          {blackRating !== undefined && <div className="text-muted-foreground">{blackRating}</div>}
         </div>
-        
-        {blackAccuracy !== undefined && (
+        {blackAccuracy !== undefined && blackAccuracy > 0 &&(
           <div className="mt-2">
-            <div className="flex justify-between text-xs mb-1">
-              <span>Accuracy</span>
-              <span className="text-emerald-400">{Math.round(blackAccuracy * 100)}%</span>
-            </div>
-            <Progress value={blackAccuracy * 100} className="h-1" />
+            <div className="flex justify-between text-xs mb-1"><span>Accuracy</span><span className="text-emerald-500 font-medium">{blackAccuracy.toFixed(1)}%</span></div>
+            {/* Remove indicatorClassName */}
+            <Progress value={blackAccuracy} className="h-1 bg-emerald-500" /> {/* Use theme progress, apply color directly if needed */}
           </div>
         )}
-        
-        {renderMoveQualityBars('black')}
-        
-        {estimatedPerformance?.black && (
-          <TooltipProvider>
+        {estimatedPerformance?.black !== undefined && (
+          <TooltipProvider delayDuration={200}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="mt-2 flex items-center text-xs">
-                  <TrendingUp className={`h-3 w-3 mr-1 ${blackPerformanceChange.isHigher ? 'text-green-400' : 'text-red-400'}`} />
-                  <span className={blackPerformanceChange.isHigher ? 'text-green-400' : 'text-red-400'}>
-                    Est. Performance: {estimatedPerformance.black}
-                    {blackPerformanceChange.difference > 0 && (
-                      <span> ({blackPerformanceChange.isHigher ? '+' : '-'}{blackPerformanceChange.difference})</span>
-                    )}
-                  </span>
-                </div>
+                 <div className="mt-2 flex items-center text-xs cursor-default">
+                   <TrendingUp className={`h-3 w-3 mr-1 ${blackPerformanceChange.isHigher ? 'text-green-500' : 'text-red-500'}`} />
+                   <span className={blackPerformanceChange.isHigher ? 'text-green-500' : 'text-red-500'}>
+                     Est. Perf: {Math.round(estimatedPerformance.black)}
+                     {blackPerformanceChange.difference > 0 && blackRating !== undefined && (<span className="ml-1">({blackPerformanceChange.sign}{blackPerformanceChange.difference})</span>)}
+                   </span>
+                 </div>
               </TooltipTrigger>
-              <TooltipContent>
-                <p>Estimated rating performance based on move quality at current position</p>
-              </TooltipContent>
+              <TooltipContent><p>Estimated rating based on game performance.</p></TooltipContent>
             </Tooltip>
           </TooltipProvider>
         )}
+        {renderMoveQualityBars('black')}
       </div>
     </div>
   );

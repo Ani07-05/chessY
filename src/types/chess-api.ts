@@ -271,3 +271,76 @@ export function simulateEngineResponse(fen: string, engineDepth: number = 12): C
     };
   }
 }
+
+// --- Additions for stockfish.online API ---
+
+export interface StockfishOnlineResponse {
+  success: boolean;
+  evaluation: number | null; // Evaluation in pawns (null if mate)
+  mate: number | null; // Moves to mate (null if no mate)
+  bestmove: string | null; // Best move in UCI format (e.g., "e2e4") + ponder
+  continuation: string | null; // Engine line
+  // Optional: Add 'data' field for error information if success is false
+  data?: string; 
+}
+
+/**
+ * Fetches evaluation from the stockfish.online API.
+ * 
+ * @param fen The FEN string of the position to evaluate.
+ * @param depth The search depth for the engine (max 15 recommended by API docs).
+ * @param timeout Timeout in milliseconds (default: 10000ms).
+ * @returns Promise resolving to the Stockfish API response.
+ */
+export async function getStockfishOnlineEvaluation(
+  fen: string,
+  depth: number = 13, // Default depth
+  timeout: number = 10000 
+): Promise<StockfishOnlineResponse> {
+  const apiUrl = `https://stockfish.online/api/s/v2.php?fen=${encodeURIComponent(fen)}&depth=${depth}`;
+  
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId); // Clear timeout if fetch completes
+
+    if (!response.ok) {
+      console.error(`Stockfish API request failed: ${response.status} ${response.statusText}`);
+      return { success: false, evaluation: 0, mate: null, bestmove: null, continuation: null, data: `HTTP error ${response.status}` };
+    }
+
+    const data: StockfishOnlineResponse = await response.json();
+
+    if (!data.success) {
+        console.warn(`Stockfish API returned success: false for FEN ${fen}`, data.data);
+        // Return a default failure state but include any data provided
+        return { ...data, evaluation: data.evaluation ?? 0, mate: data.mate ?? null, bestmove: data.bestmove ?? null, continuation: data.continuation ?? null };
+    }
+    
+    // Ensure evaluation is a number, default to 0 if null and no mate
+    if (data.evaluation === null && data.mate === null) {
+        data.evaluation = 0;
+    }
+
+    return data;
+
+  } catch (error: unknown) {
+    clearTimeout(timeoutId); // Clear timeout if fetch fails
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error(`Stockfish API request timed out after ${timeout}ms for FEN: ${fen}`);
+      return { success: false, evaluation: 0, mate: null, bestmove: null, continuation: null, data: 'Request timed out' };
+    } else {
+      console.error('Error fetching Stockfish evaluation:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { success: false, evaluation: 0, mate: null, bestmove: null, continuation: null, data: errorMessage };
+    }
+  }
+}
+
+// --- End of additions ---

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react";
-import { Chess, Move, Square } from "chess.js"; 
+import { Chess, Move} from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,19 +20,56 @@ import ChessEvaluationBar from "./ChessEvaluationBar";
 import ChessMoveList from "./ChessMoveList";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
+// Import the new API function
+import { getStockfishOnlineEvaluation, StockfishOnlineResponse } from "@/types/chess-api";
 
 
-const MOVE_CLASSIFICATIONS = {
-  BRILLIANT: { threshold: 0.9, multiplier: 2.0 },
-  GREAT: { threshold: 0.6, multiplier: 1.5 },
-  BEST: { threshold: 0.3, multiplier: 1.2 },
-  EXCELLENT: { threshold: 0.1, multiplier: 1.1 },
-  GOOD: { threshold: -0.1, multiplier: 1.0 },
-  BOOK: { threshold: 0, multiplier: 1.0 },
-  INACCURACY: { threshold: -0.5, multiplier: 0.8 },
-  MISTAKE: { threshold: -1.0, multiplier: 0.6 },
-  BLUNDER: { threshold: -2.0, multiplier: 0.4 }
+// Define helper outside component or ensure it's defined before use
+const getFenPieces = (fen: string) => {
+  const pieces: Record<string, number> = {};
+  const position = fen.split(" ")[0];
+
+  for (const char of position) {
+    if (/[pnbrqkPNBRQK]/.test(char)) {
+      pieces[char] = (pieces[char] || 0) + 1;
+    }
+  }
+
+  return pieces;
 };
+
+// Define helper outside component or ensure it's defined before use
+const getPieceSymbol = (piece: string): string => {
+  const symbols: Record<string, string> = {
+    p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+    P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
+  };
+  return symbols[piece] || piece;
+};
+
+// Define helper outside component or ensure it's defined before use
+const deriveMoveQualityCounts = (analysis: (MoveAnalysis | null)[]) => {
+  // Use lowercase keys to match ChessPlayerStats expected props
+  const counts = {
+    white: { brilliant: 0, great: 0, best: 0, excellent: 0, good: 0, book: 0, inaccuracy: 0, mistake: 0, blunder: 0, total: 0 },
+    black: { brilliant: 0, great: 0, best: 0, excellent: 0, good: 0, book: 0, inaccuracy: 0, mistake: 0, blunder: 0, total: 0 },
+  };
+
+  analysis.forEach(item => {
+    if (item) {
+      const player = item.playerColor;
+      // Map the quality string (e.g., "Brilliant") to the lowercase key (e.g., "brilliant")
+      const qualityKey = item.quality.toLowerCase() as keyof typeof counts.white;
+      if (counts[player] && qualityKey in counts[player]) {
+        counts[player][qualityKey]++;
+        counts[player].total++;
+      }
+    }
+  });
+  return counts;
+};
+
+
 
 interface GameData {
   pgn?: string;
@@ -48,1024 +85,908 @@ interface GameData {
   resultClass?: string;
 }
 
+// Move the interface definition outside the component
+export interface MoveAnalysis {
+  moveNumber: number;
+  moveText: string;
+  move: string; // SAN notation
+  playerColor: 'white' | 'black';
+  prevEval: number; // Eval before this move
+  evaluation: number; // Eval after this move
+  bestEval: number; // Eval if the best move was played instead
+  cpl: number; // Centipawn Loss for this move
+  quality: string; // Classification (e.g., Best, Blunder) - Renamed from moveQuality
+  estimatedRatingAfterMove: number; // Add back: Running estimated rating after this move
+}
+
 interface GameReviewProps {
   game: GameData;
   username: string;
   isOpen?: boolean;
 }
 
-interface MoveAnalysis {
-  moveNumber: number;
-  moveText: string;
-  move: string;
-  playerColor: 'white' | 'black';
-  prevEval: number;
-  evaluation: number;
-  evalDifference: number;
-  quality: string;
-  estimatedRating: number;
-}
+// Define a constant for the engine depth
+const ENGINE_DEPTH = 13; // Adjust as needed (max 15 for stockfish.online)
+const API_DELAY_MS = 150; // Delay between API calls to avoid rate limits
 
 const GameReview = ({ game, username, isOpen = true }: GameReviewProps) => {
   const [chess, setChess] = useState<Chess | null>(null);
-  const [moveHistory, setMoveHistory] = useState<Move[]>([]); 
+  const [moveHistory, setMoveHistory] = useState<Move[]>([]);
   const [currentMoveIndex, setCurrentMoveIndex] = useState(-1);
-  const [evaluation, setEvaluation] = useState(0);
+  const [evaluation, setEvaluation] = useState(0); // Eval of the current board position
   const [loading, setLoading] = useState(true);
-  const [moveQuality, setMoveQuality] = useState({
-    white: {
-      brilliant: 0,
-      great: 0,
-      best: 0,
-      excellent: 0,
-      good: 0,
-      inaccuracy: 0,
-      mistake: 0,
-      blunder: 0,
-      book: 0
-    },
-    black: {
-      brilliant: 0,
-      great: 0,
-      best: 0,
-      excellent: 0,
-      good: 0,
-      inaccuracy: 0,
-      mistake: 0,
-      blunder: 0,
-      book: 0
-    }
-  });
-  const [moveEvaluations, setMoveEvaluations] = useState<number[]>([]);
-  const [accuracies, setAccuracies] = useState({
-    white: 0,
-    black: 0
-  });
-  const [moveByMoveRatings, setMoveByMoveRatings] = useState<{
-    white: number[];
-    black: number[];
-  }>({
-    white: [],
-    black: []
+  const [analysisProgress, setAnalysisProgress] = useState(0); // Progress for engine analysis
+  const [isAnalyzing, setIsAnalyzing] = useState(false); // Separate state for analysis phase
+  // Store detailed analysis for each move
+  const [moveAnalysis, setMoveAnalysis] = useState<(MoveAnalysis | null)[]>([]);
+  // Store final calculated accuracies and performance ratings
+  const [accuracies, setAccuracies] = useState({ white: 0, black: 0 });
+  const [overallEstimatedRatings, setOverallEstimatedRatings] = useState({
+    white: game?.white?.rating ?? 1500, // Initialize with actual or default rating
+    black: game?.black?.rating ?? 1500
   });
   const [isPlayingThrough, setIsPlayingThrough] = useState(false);
   const [playbackSpeed, ] = useState(1500);
-  const [moveAnalysis, setMoveAnalysis] = useState<MoveAnalysis[]>([]); 
   const [capturedPieces, setCapturedPieces] = useState<{ white: string[]; black: string[] }>({ white: [], black: [] });
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [lastActionTimestamp, setLastActionTimestamp] = useState(0);
+  // Add missing state declarations
+  const [evaluationsAfterMove, setEvaluationsAfterMove] = useState<number[]>([]);
+  const [evaluationsBestMove, setEvaluationsBestMove] = useState<number[]>([]);
 
-  const generateMoveEvaluations = useCallback((chessInstance: Chess) => {
+
+  // Function to update captured pieces based on FEN
+  const updateCapturedPieces = useCallback((fen: string) => {
+    const initialPieces: Record<string, number> = {
+      P: 8, N: 2, B: 2, R: 2, Q: 1, K: 1,
+      p: 8, n: 2, b: 2, r: 2, q: 1, k: 1,
+    };
+    const currentPieces = getFenPieces(fen); // Now defined above
+    const captured: { white: string[]; black: string[] } = { white: [], black: [] };
+
+    for (const piece in initialPieces) {
+      const initialCount = initialPieces[piece];
+      const currentCount = currentPieces[piece] || 0;
+      const diff = initialCount - currentCount;
+
+      if (diff > 0) {
+        const pieceSymbol = getPieceSymbol(piece); // Now defined above
+        const isWhitePiece = piece === piece.toUpperCase();
+        const capturedBy = isWhitePiece ? 'black' : 'white'; // If white piece missing, black captured it
+        for (let i = 0; i < diff; i++) {
+          captured[capturedBy].push(pieceSymbol);
+        }
+      }
+    }
+    // Sort captured pieces for consistent display (optional)
+    captured.white.sort();
+    captured.black.sort();
+    setCapturedPieces(captured);
+  }, []); // Removed getFenPieces and getPieceSymbol as they are stable external functions
+
+
+  // Function to convert API eval/mate to a single number (pawns)
+  const getEvaluationValue = (apiResponse: StockfishOnlineResponse): number => {
+    if (apiResponse.mate !== null) {
+        // Assign large score for mate, sign indicates who is mating
+        // Positive for white mating, negative for black mating
+        const mateScore = 10000; // Use a large number outside normal eval range
+        // Adjust sign based on moves to mate if needed, but API seems to handle it
+        return apiResponse.mate > 0 ? mateScore - apiResponse.mate : -mateScore - apiResponse.mate;
+    }
+    // Use evaluation, default to 0 if null
+    return apiResponse.evaluation ?? 0;
+  };
+
+  // Function to parse best move from API response (e.g., "e2e4 ponder e7e5" -> "e2e4")
+  const parseBestMove = (bestmoveString: string | null): string | null => {
+    if (!bestmoveString || bestmoveString.trim() === "") {
+        return null;
+    }
+
+    const parts = bestmoveString.trim().split(' ');
+    let potentialMove: string | undefined;
+
+    // Check if the response starts with "bestmove" and has at least one more part
+    if (parts[0].toLowerCase() === 'bestmove' && parts.length > 1) {
+        potentialMove = parts[1]; // The actual move should be the second part
+    } else if (parts.length > 0) {
+        // Otherwise, assume the first part is the move (or potential garbage)
+        potentialMove = parts[0];
+    } else {
+        // Should not happen if trim() was effective, but safe check
+        return null;
+    }
+
+    if (!potentialMove) {
+        console.warn('Could not determine potential move from bestmove string:', bestmoveString);
+        return null;
+    }
+
+    // Check if the extracted potential move looks like a UCI move
+    const uciPattern = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
+    if (!uciPattern.test(potentialMove)) {
+      console.warn(`Invalid UCI move format extracted: '${potentialMove}' from string: '${bestmoveString}'`);
+      return null;
+    }
+
+    return potentialMove; // Return the validated UCI move
+  };
+
+  // NEW function to fetch evaluations from the Stockfish API
+  const fetchEngineEvaluations = useCallback(async (chessInstance: Chess) => {
+    setIsAnalyzing(true);
+    setAnalysisProgress(0);
     const history = chessInstance.history({ verbose: true });
-    const evaluations: number[] = [0];
-    
-    const tempChess = new Chess();
-    let prevEval = 0;
-    
+    const evalsAfter: number[] = [0]; // Eval before first move
+    const evalsBest: number[] = [0]; // Eval if best move was played (before first move)
+
+    const tempChessEval = new Chess(); // For getting FEN after actual move
+    const tempChessBest = new Chess(); // For applying best move and getting FEN
+
     for (let i = 0; i < history.length; i++) {
       const move = history[i];
-      tempChess.move({ from: move.from, to: move.to, promotion: move.promotion });
-      
-      const pieces = countPieces(tempChess);
-      
-      
-      let positionFactor = 0;
-      
-      const centralSquares: Square[] = ['d4', 'd5', 'e4', 'e5']; 
-      centralSquares.forEach(square => {
-        const piece = tempChess.get(square); 
-        if (piece) {
-          positionFactor += piece.color === 'w' ? 0.15 : -0.15;
-        }
-      });
-      
-      
-      if (pieces.w.b >= 2) positionFactor += 0.5;
-      if (pieces.b.b >= 2) positionFactor -= 0.5;
-      
-      
-      const wKingSquare = findKing(tempChess, 'w');
-      const bKingSquare = findKing(tempChess, 'b');
-      
-      
-      if (wKingSquare) {
-        const wKingFile = wKingSquare.charCodeAt(0) - 97;
-        if ((wKingFile === 6 || wKingFile === 7) && pieces.w.p >= 3) {
-          positionFactor += 0.4;
-        }
+      const fenBeforeMove = tempChessEval.fen(); // FEN before the current move 'i'
+
+      // Apply the actual move to get the FEN after the move
+      const actualMoveResult = tempChessEval.move(move);
+      if (!actualMoveResult) {
+          console.error(`Failed to apply actual move ${i}: ${move.san}`);
+          // Handle error: maybe push previous eval or a default?
+          evalsAfter.push(evalsAfter[evalsAfter.length - 1] ?? 0);
+          evalsBest.push(evalsBest[evalsBest.length - 1] ?? 0);
+          continue; // Skip to next move
       }
-      
-      if (bKingSquare) {
-        const bKingFile = bKingSquare.charCodeAt(0) - 97;
-        if ((bKingFile === 6 || bKingFile === 7) && pieces.b.p >= 3) {
-          positionFactor -= 0.4;
-        }
+      const fenAfterActualMove = tempChessEval.fen();
+
+      // --- Evaluation AFTER the actual move played ---
+      let evalAfterActual = evalsAfter[evalsAfter.length - 1] ?? 0; // Default to previous
+      try {
+          await new Promise(resolve => setTimeout(resolve, API_DELAY_MS)); // Rate limit delay
+          const apiResponseActual = await getStockfishOnlineEvaluation(fenAfterActualMove, ENGINE_DEPTH);
+          if (apiResponseActual.success) {
+              evalAfterActual = getEvaluationValue(apiResponseActual);
+          } else {
+              console.warn(`API failed for FEN (after actual): ${fenAfterActualMove}. Using previous eval.`);
+          }
+      } catch (e) {
+          console.error(`Error fetching eval for FEN (after actual): ${fenAfterActualMove}`, e);
       }
-      
-      
-      const materialEval = 
-        pieces.w.p - pieces.b.p + 
-        3 * (pieces.w.n - pieces.b.n) + 
-        3.25 * (pieces.w.b - pieces.b.b) + 
-        5 * (pieces.w.r - pieces.b.r) + 
-        9 * (pieces.w.q - pieces.b.q);
-      
-      
-      const noiseFactor = (Math.random() * 0.2) - 0.1;
-      
-      
-      const tempoFactor = tempChess.turn() === 'w' ? 0.1 : -0.1;
-      
-      const evaluation = materialEval + positionFactor + noiseFactor + tempoFactor;
-      
-      
-      const smoothedEval = prevEval * 0.2 + evaluation * 0.8;
-      prevEval = smoothedEval;
-      
-      evaluations.push(smoothedEval);
+      evalsAfter.push(evalAfterActual);
+
+
+      // --- Evaluation IF the BEST move was played instead ---
+      let evalAfterBest = evalAfterActual; // Default to actual eval if best move fails
+      try {
+          await new Promise(resolve => setTimeout(resolve, API_DELAY_MS)); // Rate limit delay
+          const apiResponseBefore = await getStockfishOnlineEvaluation(fenBeforeMove, ENGINE_DEPTH);
+
+          // Add logging here to inspect the response
+          console.log(`API response for FEN ${fenBeforeMove}:`, apiResponseBefore);
+
+          if (apiResponseBefore.success) {
+              const bestMoveUCI = parseBestMove(apiResponseBefore.bestmove);
+              if (bestMoveUCI) {
+                  tempChessBest.load(fenBeforeMove); // Load state before the move
+                  // Convert UCI string to move object
+                  let moveObject = null;
+                  try {
+                      const from = bestMoveUCI.substring(0, 2);
+                      const to = bestMoveUCI.substring(2, 4);
+                      const promotion = bestMoveUCI.length === 5 ? bestMoveUCI.substring(4) : undefined;
+                      moveObject = { from, to, promotion };
+                  } catch (parseError) {
+                      console.error(`Error parsing UCI move: ${bestMoveUCI}`, parseError);
+                  }
+                  // Apply the parsed move
+                  const bestMoveResult = moveObject ? tempChessBest.move(moveObject) : null;
+                  if (bestMoveResult) {
+                      const fenAfterBestMove = tempChessBest.fen();
+                      await new Promise(resolve => setTimeout(resolve, API_DELAY_MS)); // Rate limit delay
+                      const apiResponseBest = await getStockfishOnlineEvaluation(fenAfterBestMove, ENGINE_DEPTH);
+                      if (apiResponseBest.success) {
+                          evalAfterBest = getEvaluationValue(apiResponseBest);
+                      } else {
+                          console.warn(`API failed for FEN (after best): ${fenAfterBestMove}. Using actual eval.`);
+                      }
+                  } else {
+                      console.warn(`Failed to apply best move from UCI: ${bestMoveUCI}. Using actual eval.`);
+                  }
+              } else {
+                  console.warn(`No valid best move parsed from API response. Using actual eval.`);
+              }
+          } else {
+              console.warn(`API failed for FEN (before move): ${fenBeforeMove}. Using actual eval for best.`);
+          }
+      } catch (e) {
+          console.error(`Error fetching/processing best move for FEN: ${fenBeforeMove}`, e);
+      }
+      evalsBest.push(evalAfterBest);
+
+
+      // Update progress
+      setAnalysisProgress(Math.round(((i + 1) / history.length) * 100));
     }
-    
-    return evaluations;
-  }, []);
+
+    setEvaluationsAfterMove(evalsAfter);
+    setEvaluationsBestMove(evalsBest);
+    setIsAnalyzing(false);
+    setAnalysisProgress(100);
+    toast.success("Engine analysis complete!");
+
+  // Add dependencies for useCallback
+  }, [setEvaluationsAfterMove, setEvaluationsBestMove, setIsAnalyzing, setAnalysisProgress]);
+
 
   useEffect(() => {
     if (isOpen && game) {
+      setLoading(true); // Ensure loading state is set
       try {
         const chessInstance = new Chess();
-        
+        // ... PGN/FEN loading logic ...
+        // (Ensure error handling remains as is)
         if (game.pgn) {
-          console.log("Loading PGN:", game.pgn.substring(0, 100) + "...");
-          
           try {
-            
             chessInstance.loadPgn(game.pgn);
-            console.log("PGN loaded successfully using standard method");
           } catch (pgnError) {
-            console.error("Error loading PGN with standard method:", pgnError);
-            
-            
-            console.log("Attempting manual PGN parsing as fallback...");
-            try {
-              
-              const moveRegex = /\d+\.\s+(\S+)\s+(?:(\S+)\s+)?/g;
-              let match;
-              const moves = [];
-              
-              while ((match = moveRegex.exec(game.pgn)) !== null) {
-                if (match[1]) moves.push(match[1]);
-                if (match[2]) moves.push(match[2]);
-              }
-              
-              console.log("Extracted moves:", moves);
-              
-              
-              chessInstance.reset();
-              for (const move of moves) {
-                try {
-                  const result = chessInstance.move(move);
-                  if (!result) {
-                    console.error(`Failed to apply move: ${move}`);
-                  }
-                } catch (moveError) {
-                  console.error(`Error applying move ${move}:`, moveError);
-                }
-              }
-              
-              console.log("Manual PGN parsing complete");
-            } catch (fallbackError) {
-              console.error("Manual PGN parsing also failed:", fallbackError);
-              chessInstance.reset();
-            }
+            console.error("Error loading PGN:", pgnError);
+            toast.error("Failed to load PGN.");
+            setLoading(false);
+            setChess(null);
+            return;
           }
         } else if (game.fen) {
-          console.log("Loading FEN:", game.fen);
-          chessInstance.load(game.fen);
-        }
-        
-        setChess(chessInstance);
-
-
-        
-        
-        
-        const history = chessInstance.history({ verbose: true });
-        console.log("Full move history:", history);
-        
-        
-        const knightMoves = history.filter(m => m.piece?.toLowerCase() === 'n');
-        console.log("Knight moves in the game:", knightMoves);
-        
-        
-        const knightDestinations: Record<string, Move> = {}; 
-        for (let i = 0; i < knightMoves.length; i++) {
-          const move = knightMoves[i];
-          if (knightDestinations[move.to as string]) {
-            console.warn(`POTENTIAL ISSUE: Knight moves to ${move.to} multiple times:`, 
-              knightDestinations[move.to], "and now", move);
+          try {
+            chessInstance.load(game.fen);
+          } catch (fenError) {
+            console.error("Error loading FEN:", game.fen, fenError);
+            toast.error("Failed to load FEN.");
+            setLoading(false);
+            setChess(null);
+            return;
           }
-          knightDestinations[move.to] = move;
+        } else {
+           toast.error("No PGN or FEN provided for game review.");
+           setLoading(false);
+           setChess(null);
+           return;
         }
-        
+
+        setChess(chessInstance);
+        const history = chessInstance.history({ verbose: true });
         setMoveHistory(history);
-        
-        const evals = generateMoveEvaluations(chessInstance);
-        setMoveEvaluations(evals);
-        
-        const qualities = calculateMoveQualities(evals, chessInstance, game);
-        setMoveQuality(qualities.moveQuality);
-        setAccuracies(qualities.accuracies);
-        setMoveByMoveRatings(qualities.moveByMoveRatings);
-        
+
+        // Generate evaluations (placeholder or real)
+        fetchEngineEvaluations(chessInstance);
+
+        // Reset state for new game
         setCurrentMoveIndex(-1);
+        setEvaluation(0);
+        setMoveAnalysis([]); // Clear previous analysis
+        setAccuracies({ white: 0, black: 0 });
+        setOverallEstimatedRatings({ white: game.white?.rating ?? 1500, black: game.black?.rating ?? 1500 });
+        updateCapturedPieces(chessInstance.fen()); // Call updateCapturedPieces here
         setLoading(false);
       } catch (error) {
         console.error("Error loading chess game:", error);
         setLoading(false);
+        setChess(null);
         toast.error("Error loading chess game");
       }
+    } else {
+      // Reset or clear state if component is not open or no game data
+      setChess(null);
+      setMoveHistory([]);
+      setCurrentMoveIndex(-1);
+      setLoading(false); // Ensure loading is false if not open/no game
     }
-  }, [game, isOpen, generateMoveEvaluations]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game, isOpen, fetchEngineEvaluations, updateCapturedPieces]); // Add updateCapturedPieces dependency
+
+
+  // Function to map CPL to an estimated rating for a single move
+  const mapCPLToRating = (cpl: number): number => {
+    // Revised curve: Less generous at the top, more granular lower down.
+    // Calibrate based on observation: ~10 CPL -> ~2000+, ~30 CPL -> ~1600, ~70 CPL -> ~1200 etc.
+    // This is still a rough estimate and needs real data calibration.
+    if (cpl < 5) return 2200; // Very low CPL -> Strong Expert/Low Master
+    if (cpl < 10) return 2000 + (10 - cpl) * 40; // 2000-2200
+    if (cpl < 20) return 1800 + (20 - cpl) * 20; // 1800-2000
+    if (cpl < 35) return 1600 + (35 - cpl) * 13.3; // 1600-1800
+    if (cpl < 55) return 1400 + (55 - cpl) * 10; // 1400-1600
+    if (cpl < 80) return 1200 + (80 - cpl) * 8; // 1200-1400
+    if (cpl < 120) return 1000 + (120 - cpl) * 5; // 1000-1200
+    if (cpl < 180) return 800 + (180 - cpl) * 3.33; // 800-1000
+    return 700; // High CPL -> Beginner range
+  };
+
+  // Function to classify move quality based on CPL and context
+  const classifyMoveByCPL = (
+    cpl: number,
+    moveIndex: number,
+    prevEval: number, // Add prevEval
+    evaluation: number, // Add evaluation (eval after the move)
+    playerColor: 'white' | 'black' // Add playerColor
+  ): string => {
+    // Book move check (simple version)
+    if (moveIndex < 10 && cpl < 25) return "Book";
+
+    // Brilliant Move Criteria:
+    // 1. Very low CPL (close to best move)
+    // 2. Significantly improves the position from a non-winning state
+    const evalGain = playerColor === 'white' ? evaluation - prevEval : prevEval - evaluation;
+    const wasWinning = playerColor === 'white' ? prevEval > 1.5 : prevEval < -1.5;
+
+    if (cpl <= 5 && evalGain >= 1.0 && !wasWinning) {
+      // Add more checks later if needed (e.g., is it a sacrifice?)
+      return "Brilliant";
+    }
+
+    // Other classifications based on CPL thresholds
+    if (cpl <= 8) return "Best";
+    if (cpl <= 20) return "Excellent";
+    if (cpl <= 40) return "Good";
+    if (cpl <= 80) return "Inaccuracy";
+    if (cpl <= 150) return "Mistake";
+    return "Blunder";
+  };
+
+  // Calculate accuracy percentage from average CPL
+  const calculateAccuracyFromAvgCPL = (avgCPL: number): number => {
+    // Using the formula: Accuracy = 103.1668 * exp(-0.04354 * AvgCPL) - 3.1668
+    // Ensure avgCPL is non-negative
+    const safeAvgCPL = Math.max(0, avgCPL);
+    const accuracy = 103.1668 * Math.exp(-0.04354 * safeAvgCPL) - 3.1668;
+    // Clamp accuracy between 0 and 100
+    return Math.max(0, Math.min(100, Math.round(accuracy * 10) / 10));
+  };
 
 
 
-  const calculateMoveQualities = (evaluations: number[], chessInstance: Chess, game: GameData) => {
-    const history = chessInstance.history({ verbose: true });
-    const moveQuality = {
-      white: {
-        brilliant: 0,
-        great: 0,
-        best: 0,
-        excellent: 0,
-        good: 0,
-        inaccuracy: 0,
-        mistake: 0,
-        blunder: 0,
-        book: 0
-      },
-      black: {
-        brilliant: 0,
-        great: 0,
-        best: 0,
-        excellent: 0,
-        good: 0,
-        inaccuracy: 0,
-        mistake: 0,
-        blunder: 0,
-        book: 0
-      }
-    };
-    
-    let whiteAccuracySum = 0;
+  // This effect calculates analysis results AFTER engine evaluations are ready
+  useEffect(() => {
+    // Ensure all required data is present and valid
+    // Check lengths carefully: evals should be history.length + 1
+    if (!chess || moveHistory.length === 0 || evaluationsAfterMove.length !== moveHistory.length + 1 || evaluationsBestMove.length !== moveHistory.length + 1) {
+      return;
+    }
+
+    // console.log("Running analysis calculation..."); // Debug log
+
+    const analysisResults: (MoveAnalysis | null)[] = [];
+    // Use optional chaining and provide default ratings from the game prop
+    let currentWhiteRating = game?.white?.rating ?? 1500;
+    let currentBlackRating = game?.black?.rating ?? 1500;
+    const alpha = 0.1;
+
+    let whiteCPLSum = 0;
     let whiteMoveCount = 0;
-    let blackAccuracySum = 0;
+    let blackCPLSum = 0;
     let blackMoveCount = 0;
-    
-    const moveRatingImpacts = {
-      white: [] as number[],
-      black: [] as number[]
-    };
 
-    const moveByMoveRatings = {
-      white: [] as number[],
-      black: [] as number[]
-    };
-    
-    const tempChess = new Chess();
-    
-    
-    const whiteBaseRating = game?.white?.rating || 1500;
-    const blackBaseRating = game?.black?.rating || 1500;
-    
-    let currentWhiteRating = whiteBaseRating;
-    let currentBlackRating = blackBaseRating;
-    
-    
-    const allMoveAnalyses: MoveAnalysis[] = []; 
-    
-    for (let i = 0; i < history.length; i++) {
-      const color = i % 2 === 0 ? 'white' : 'black';
-      const move = history[i];
-      const prevEval = evaluations[i];
-      const currentEval = evaluations[i + 1];
-      
-      
-      let evalChange;
-      
-      if (color === 'white') {
-        evalChange = currentEval - prevEval;
-      } else {
-        evalChange = prevEval - currentEval;
+    for (let i = 0; i < moveHistory.length; i++) {
+      const move = moveHistory[i];
+      if (!move || !move.color || !move.san) {
+         console.warn(`Skipping invalid move object at index ${i}:`, move);
+         analysisResults.push(null);
+         continue;
       }
-      
-      let moveAccuracy;
-      let ratingMultiplier;
-      
-      
-      if (evalChange >= MOVE_CLASSIFICATIONS.BRILLIANT.threshold) {
-        moveQuality[color].brilliant++;
-        moveAccuracy = 100;
-        ratingMultiplier = MOVE_CLASSIFICATIONS.BRILLIANT.multiplier;
-      } else if (evalChange >= MOVE_CLASSIFICATIONS.GREAT.threshold) {
-        moveQuality[color].great++;
-        moveAccuracy = 96;
-        ratingMultiplier = MOVE_CLASSIFICATIONS.GREAT.multiplier;
-      } else if (evalChange >= MOVE_CLASSIFICATIONS.BEST.threshold) {
-        moveQuality[color].best++;
-        moveAccuracy = 90;
-        ratingMultiplier = MOVE_CLASSIFICATIONS.BEST.multiplier;
-      } else if (evalChange >= MOVE_CLASSIFICATIONS.EXCELLENT.threshold) {
-        moveQuality[color].excellent++;
-        moveAccuracy = 85;
-        ratingMultiplier = MOVE_CLASSIFICATIONS.EXCELLENT.multiplier;
-      } else if (evalChange >= MOVE_CLASSIFICATIONS.GOOD.threshold) {
-        moveQuality[color].good++;
-        moveAccuracy = 75;
-        ratingMultiplier = MOVE_CLASSIFICATIONS.GOOD.multiplier;
-      } else if (evalChange >= MOVE_CLASSIFICATIONS.INACCURACY.threshold) {
-        moveQuality[color].inaccuracy++;
-        moveAccuracy = 60;
-        ratingMultiplier = MOVE_CLASSIFICATIONS.INACCURACY.multiplier;
-      } else if (evalChange >= MOVE_CLASSIFICATIONS.MISTAKE.threshold) {
-        moveQuality[color].mistake++;
-        moveAccuracy = 40;
-        ratingMultiplier = MOVE_CLASSIFICATIONS.MISTAKE.multiplier;
-      } else {
-        moveQuality[color].blunder++;
-        moveAccuracy = 20;
-        ratingMultiplier = MOVE_CLASSIFICATIONS.BLUNDER.multiplier;
-      }
-      
-      
-      const baseRating = color === 'white' ? whiteBaseRating : blackBaseRating;
-      
-      
-      const ratingChange = (baseRating * ratingMultiplier - baseRating) * 0.7;
-      
-      if (color === 'white') {
-        
-        whiteAccuracySum += moveAccuracy;
-        whiteMoveCount++;
-        
-        
-        moveRatingImpacts.white.push(ratingMultiplier);
-        
-        
-        currentWhiteRating = currentWhiteRating * 0.7 + (baseRating + ratingChange) * 0.3;
-        
-        
-        moveByMoveRatings.white.push(Math.round(currentWhiteRating) || baseRating);
-      } else {
-        blackAccuracySum += moveAccuracy;
-        blackMoveCount++;
-        moveRatingImpacts.black.push(ratingMultiplier);
-        
-        currentBlackRating = currentBlackRating * 0.7 + (baseRating + ratingChange) * 0.3;
-        moveByMoveRatings.black.push(Math.round(currentBlackRating) || baseRating);
-      }
-      
-      tempChess.move({ from: move.from, to: move.to, promotion: move.promotion });
-      
-      
-      const qualityLabel = evalChange >= MOVE_CLASSIFICATIONS.BRILLIANT.threshold ? "Brilliant" :
-                         evalChange >= MOVE_CLASSIFICATIONS.GREAT.threshold ? "Great" :
-                         evalChange >= MOVE_CLASSIFICATIONS.BEST.threshold ? "Best" :
-                         evalChange >= MOVE_CLASSIFICATIONS.EXCELLENT.threshold ? "Excellent" :
-                         evalChange >= MOVE_CLASSIFICATIONS.GOOD.threshold ? "Good" :
-                         evalChange >= MOVE_CLASSIFICATIONS.INACCURACY.threshold ? "Inaccuracy" :
-                         evalChange >= MOVE_CLASSIFICATIONS.MISTAKE.threshold ? "Mistake" : "Blunder";
-      
-      
+
+      const playerColor = move.color === 'w' ? 'white' : 'black';
       const moveNumber = Math.floor(i / 2) + 1;
-      const moveText = `${moveNumber}${i % 2 === 0 ? "." : "..."}${move.san}`;
-      
-      allMoveAnalyses[i] = { 
+      const moveText = `${moveNumber}${playerColor === 'white' ? '.' : '...'}${move.san}`;
+
+      // Indices for eval arrays are i (before move) and i+1 (after move)
+      const prevEval = evaluationsAfterMove[i];
+      const evaluation = evaluationsAfterMove[i + 1];
+      const bestEval = evaluationsBestMove[i + 1];
+
+      if (typeof prevEval !== 'number' || typeof evaluation !== 'number' || typeof bestEval !== 'number') {
+        console.warn(`Invalid evaluation data for move ${i + 1}:`, { prevEval, evaluation, bestEval });
+        analysisResults.push(null);
+        continue;
+      }
+
+      let cpl = 0;
+      if (playerColor === 'white') {
+        // White wants higher eval, CPL = best_possible - actual
+        cpl = Math.max(0, bestEval - evaluation);
+      } else {
+        // Black wants lower eval (more negative), CPL = actual - best_possible (which is more negative)
+        cpl = Math.max(0, evaluation - bestEval);
+      }
+
+      // Update the call to pass the required arguments
+      const quality = classifyMoveByCPL(cpl, i, prevEval, evaluation, playerColor);
+      let estimatedRatingAfterMove: number;
+
+      // Update running rating estimate for non-book moves
+      if (quality !== "Book") {
+        const moveRating = mapCPLToRating(cpl); // Estimate rating for this specific move
+        if (playerColor === 'white') {
+          // Apply weighted moving average
+          currentWhiteRating = alpha * moveRating + (1 - alpha) * currentWhiteRating;
+          estimatedRatingAfterMove = Math.round(currentWhiteRating);
+          whiteCPLSum += cpl;
+          whiteMoveCount++;
+        } else {
+          // Apply weighted moving average
+          currentBlackRating = alpha * moveRating + (1 - alpha) * currentBlackRating;
+          estimatedRatingAfterMove = Math.round(currentBlackRating);
+          blackCPLSum += cpl;
+          blackMoveCount++;
+        }
+      } else {
+        // For book moves, the running estimate doesn't change
+        estimatedRatingAfterMove = Math.round(playerColor === 'white' ? currentWhiteRating : currentBlackRating);
+      }
+
+      analysisResults.push({
         moveNumber,
         moveText,
         move: move.san,
-        playerColor: color,
+        playerColor,
         prevEval,
-        evaluation: currentEval,
-        evalDifference: evalChange,
-        quality: qualityLabel,
-        estimatedRating: color === 'white' ? 
-                        moveByMoveRatings.white[moveByMoveRatings.white.length - 1] : 
-                        moveByMoveRatings.black[moveByMoveRatings.black.length - 1]
-      };
-    }
-    
-    
-    setMoveAnalysis(allMoveAnalyses);
-    
-    
-    const whiteAccuracy = whiteMoveCount > 0 ? whiteAccuracySum / whiteMoveCount / 100 : 0;
-    const blackAccuracy = blackMoveCount > 0 ? blackAccuracySum / blackMoveCount / 100 : 0;
-    
-    return {
-      moveQuality,
-      accuracies: {
-        white: whiteAccuracy,
-        black: blackAccuracy
-      },
-      moveByMoveRatings
-    };
-  };
-
-  const findKing = (chess: Chess, color: 'w' | 'b'): Square => { 
-    const board = chess.board();
-    for (let i = 0; i < 8; i++) {
-      for (let j = 0; j < 8; j++) {
-        const piece = board[i][j];
-        if (piece && piece.type === 'k' && piece.color === color) {
-          const squareNotation = (String.fromCharCode(97 + j) + (8 - i)) as Square; 
-          return squareNotation;
-        }
-      }
-    }
-    
-    return 'e1'; 
-  };
-
-  const countPieces = (chess: Chess) => {
-    const pieces = {
-      w: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 },
-      b: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 }
-    };
-    
-    const board = chess.board();
-    for (let i = 0; i < 8; i++) {
-      for (let j = 0; j < 8; j++) {
-        const piece = board[i][j];
-        if (piece) {
-          pieces[piece.color][piece.type]++;
-        }
-      }
-    }
-    
-    return pieces;
-  };
-
-  const updateCapturedPieces = useCallback((fen: string) => {
-    try {
-      const whiteCaptured: string[] = [];
-      const blackCaptured: string[] = [];
-
-      
-      const currentPieces = getFenPieces(fen);
-      const startingPieces = {
-        p: 8, n: 2, b: 2, r: 2, q: 1, k: 1,
-        P: 8, N: 2, B: 2, R: 2, Q: 1, K: 1
-      };
-
-      for (const piece in startingPieces) {
-        const count = startingPieces[piece as keyof typeof startingPieces] - (currentPieces[piece] || 0);
-        if (count > 0) {
-          const pieceSymbol = getPieceSymbol(piece);
-          const target = piece.toUpperCase() === piece ? blackCaptured : whiteCaptured;
-          for (let i = 0; i < count; i++) {
-            target.push(pieceSymbol);
-          }
-        }
-      }
-
-      setCapturedPieces({
-        white: whiteCaptured,
-        black: blackCaptured,
+        evaluation,
+        bestEval,
+        cpl,
+        quality,
+        estimatedRatingAfterMove, // Store the running estimate
       });
-    } catch (error) {
-      console.error("Error updating captured pieces:", error);
     }
-  }, []);
 
-  
-  const [isNavigating, setIsNavigating] = useState(false);
-  
-  const [lastActionTimestamp, setLastActionTimestamp] = useState(0);
+    setMoveAnalysis(analysisResults);
 
+    const finalWhiteAvgCPL = whiteMoveCount > 0 ? whiteCPLSum / whiteMoveCount : 0;
+    const finalBlackAvgCPL = blackMoveCount > 0 ? blackCPLSum / blackMoveCount : 0;
+
+    setAccuracies({
+      white: calculateAccuracyFromAvgCPL(finalWhiteAvgCPL),
+      black: calculateAccuracyFromAvgCPL(finalBlackAvgCPL),
+    });
+
+    // Set overall estimated ratings to the FINAL running estimate after all moves
+    setOverallEstimatedRatings({
+      white: Math.round(currentWhiteRating),
+      black: Math.round(currentBlackRating),
+    });
+
+  }, [
+      chess,
+      moveHistory,
+      evaluationsAfterMove,
+      evaluationsBestMove,
+      game?.white?.rating,
+      game?.black?.rating,
+    ]); // Refined dependencies
+
+
+  // goToMove needs to update the displayed evaluation based on the move index
   const goToMove = useCallback((moveIndex: number) => {
-    
-    if (currentMoveIndex === moveIndex || isNavigating) {
+    if (!chess || currentMoveIndex === moveIndex || isNavigating) {
       return;
     }
-    
-    if (!chess) return;
-    
-    
     setIsNavigating(true);
-    
-    
-    console.log(`Navigating to move ${moveIndex}`);
-    
     try {
-      
       const newChess = new Chess();
-      
-      if (moveIndex >= 0 && moveIndex < moveHistory.length) {
-        
-        for (let i = 0; i <= moveIndex; i++) {
-          const move = moveHistory[i];
-          const result = newChess.move({ 
-            from: move.from, 
-            to: move.to, 
-            promotion: move.promotion 
-          });
-          
-          if (!result) {
-            console.error(`Failed to apply move ${i}: ${move.san}`);
-            throw new Error(`Invalid move: ${move.san}`);
-          }
-        }
+      for (let i = 0; i <= moveIndex && i < moveHistory.length; i++) {
+        const move = moveHistory[i];
+        if (!move) throw new Error(`Invalid move history at index ${i}`);
+        const result = newChess.move({ from: move.from, to: move.to, promotion: move.promotion });
+        if (!result) throw new Error(`Failed to apply move ${i}`);
       }
-      
-      
       setChess(newChess);
       setCurrentMoveIndex(moveIndex);
-      
-      
-      if (moveIndex >= -1 && moveIndex < moveEvaluations.length) {
-        setEvaluation(moveEvaluations[moveIndex + 1]);
-      }
-      
-      
-      updateCapturedPieces(newChess.fen());
+      const displayEval = evaluationsAfterMove[moveIndex + 1] ?? evaluationsAfterMove[0] ?? 0;
+      setEvaluation(displayEval);
+      updateCapturedPieces(newChess.fen()); // Call the memoized callback
     } catch (error) {
       console.error("Error navigating to move:", error);
       toast.error("Error navigating to this position");
     } finally {
-      
-      setIsNavigating(false);
+      setTimeout(() => setIsNavigating(false), 0);
     }
-  }, [chess, moveHistory, moveEvaluations, currentMoveIndex, isNavigating, updateCapturedPieces]);
+  }, [chess, moveHistory, currentMoveIndex, isNavigating, evaluationsAfterMove, updateCapturedPieces]); // Correct dependencies
 
-
-
-  
-  const getFenPieces = (fen: string) => {
-    const pieces: Record<string, number> = {};
-    const position = fen.split(" ")[0];
-
-    for (const char of position) {
-      if (/[pnbrqkPNBRQK]/.test(char)) {
-        pieces[char] = (pieces[char] || 0) + 1;
-      }
-    }
-
-    return pieces;
-  };
-
-  
-  const getPieceSymbol = (piece: string): string => {
-    const symbols: Record<string, string> = {
-      p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
-      P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
-    };
-    return symbols[piece] || piece;
-  };
-
-  
+  // Handle moving to next move - simplified for single step
   const handleNextMove = useCallback(() => {
-    
     const now = Date.now();
-    if (now - lastActionTimestamp < 200) {
-      console.log("Throttling navigation - too soon after last action");
+    if (now - lastActionTimestamp < 100) { // Slightly reduced throttle for responsiveness
+      // console.log("Throttling navigation - too soon after last action");
       return;
     }
-    
+
     if (!chess || !moveHistory.length || currentMoveIndex >= moveHistory.length - 1 || isNavigating) {
+      // If called during playback and at the end, stop playback
       if (isPlayingThrough) {
-        setIsPlayingThrough(false);
+          setIsPlayingThrough(false);
       }
       return;
     }
 
-    
     setLastActionTimestamp(now);
-    
-    
-    console.log(`Moving forward from ${currentMoveIndex} to ${currentMoveIndex + 1}`);
-    
     const nextMoveIndex = currentMoveIndex + 1;
-    
-    if (isPlayingThrough) {
-      setTimeout(() => {
-        if (nextMoveIndex < moveHistory.length) {
-          
-          setIsNavigating(true);
-          
-          try {
-            
-            const newChess = new Chess();
-            
-            
-            for (let i = 0; i <= nextMoveIndex; i++) {
-              const move = moveHistory[i];
-              newChess.move({ 
-                from: move.from, 
-                to: move.to, 
-                promotion: move.promotion 
-              });
-            }
-            
-            
-            setChess(newChess);
-            setCurrentMoveIndex(nextMoveIndex);
-            
-            
-            if (nextMoveIndex >= -1 && nextMoveIndex < moveEvaluations.length) {
-              setEvaluation(moveEvaluations[nextMoveIndex + 1]);
-            }
-            
-            
-            updateCapturedPieces(newChess.fen());
-            
-            
-            if (nextMoveIndex < moveHistory.length - 1) {
-              setTimeout(() => {
-                handleNextMove();
-              }, playbackSpeed);
-            } else {
-              setIsPlayingThrough(false);
-            }
-          } catch (error) {
-            console.error("Error during autoplay:", error);
-            setIsPlayingThrough(false);
-          } finally {
-            setIsNavigating(false);
-          }
-        } else {
-          setIsPlayingThrough(false);
+    // console.log(`Manual/Step forward from ${currentMoveIndex} to ${nextMoveIndex}`);
+    goToMove(nextMoveIndex);
+
+  }, [chess, moveHistory, currentMoveIndex, isNavigating, lastActionTimestamp, goToMove, isPlayingThrough]); // Added isPlayingThrough
+
+  // useEffect hook to handle auto-play timer
+  useEffect(() => {
+    let timerId: NodeJS.Timeout | null = null;
+
+    if (isPlayingThrough && !isNavigating && currentMoveIndex < moveHistory.length - 1) {
+      // console.log(`Scheduling next auto-move from index ${currentMoveIndex}`);
+      timerId = setTimeout(() => {
+        // Check again if still playing before moving
+        if (isPlayingThrough) {
+          handleNextMove();
         }
-      }, 50); 
-    } else {
-      
-      goToMove(nextMoveIndex);
+      }, playbackSpeed);
+    } else if (isPlayingThrough) {
+      // Stop playing if end is reached or navigation is happening
+      // console.log("Auto-play stopping: end reached or navigating.");
+      setIsPlayingThrough(false);
     }
-  }, [chess, moveHistory, currentMoveIndex, isPlayingThrough, moveEvaluations, playbackSpeed, isNavigating, lastActionTimestamp, goToMove, updateCapturedPieces]);
-  
-  
+
+    // Cleanup function to clear the timeout
+    return () => {
+      if (timerId) {
+        // console.log("Clearing auto-play timer.");
+        clearTimeout(timerId);
+      }
+    };
+  }, [isPlayingThrough, isNavigating, currentMoveIndex, moveHistory.length, playbackSpeed, handleNextMove]);
+
+
+  // Handle moving to previous move with logging
   const handlePrevMove = useCallback(() => {
-    
+    // Throttling to prevent rapid clicks
     const now = Date.now();
-    if (now - lastActionTimestamp < 200) {
+    if (now - lastActionTimestamp < 100) { // Slightly reduced throttle
       return;
     }
-    
-    if (!chess || currentMoveIndex <= -1 || isNavigating) return;
-    
-    
-    setLastActionTimestamp(now);
-    
-    
-    console.log(`Moving backward from ${currentMoveIndex} to ${currentMoveIndex - 1} ===`);
-    
-    goToMove(currentMoveIndex - 1);
-  }, [chess, currentMoveIndex, goToMove, isNavigating, lastActionTimestamp]);
 
-  
+    if (!chess || currentMoveIndex <= -1 || isNavigating) return;
+
+    // Stop playback if user navigates manually
+    if (isPlayingThrough) setIsPlayingThrough(false);
+
+    setLastActionTimestamp(now);
+
+    // Minimal logging
+    // console.log(`Moving backward from ${currentMoveIndex} to ${currentMoveIndex - 1}`);
+
+    goToMove(currentMoveIndex - 1);
+  }, [chess, currentMoveIndex, goToMove, isNavigating, lastActionTimestamp, isPlayingThrough]); // Added isPlayingThrough
+
+  // Handle moving to first move
   const handleFirstMove = useCallback(() => {
     const now = Date.now();
-    if (now - lastActionTimestamp < 200 || !chess || isNavigating) return;
-    
+    if (now - lastActionTimestamp < 100 || !chess || isNavigating) return;
+
+    if (isPlayingThrough) setIsPlayingThrough(false); // Stop playback
+
     setLastActionTimestamp(now);
     goToMove(-1);
-  }, [chess, goToMove, isNavigating, lastActionTimestamp]);
+  }, [chess, goToMove, isNavigating, lastActionTimestamp, isPlayingThrough]); // Added isPlayingThrough
 
-  
+  // Handle moving to last move
   const handleLastMove = useCallback(() => {
     const now = Date.now();
-    if (now - lastActionTimestamp < 200 || !chess || !moveHistory.length || isNavigating) return;
-    
+    if (now - lastActionTimestamp < 100 || !chess || !moveHistory.length || isNavigating) return;
+
+    if (isPlayingThrough) setIsPlayingThrough(false); // Stop playback
+
     setLastActionTimestamp(now);
     goToMove(moveHistory.length - 1);
-  }, [chess, moveHistory, goToMove, isNavigating, lastActionTimestamp]);
+  }, [chess, moveHistory, goToMove, isNavigating, lastActionTimestamp, isPlayingThrough]); // Added isPlayingThrough
 
-  
+  // Handle play-through mode
   const handlePlayThrough = useCallback(() => {
     const now = Date.now();
-    if (now - lastActionTimestamp < 200 || isNavigating) return;
-    
-    setLastActionTimestamp(now);
-    setIsPlayingThrough(true);
-    handleNextMove();
-  }, [handleNextMove, isNavigating, lastActionTimestamp]);
+    if (now - lastActionTimestamp < 100 || isNavigating || isPlayingThrough) return; // Prevent starting if already playing
 
-  
+    setLastActionTimestamp(now);
+    // console.log("Starting play through");
+    setIsPlayingThrough(true);
+    // The useEffect hook will now trigger the first handleNextMove
+  }, [isNavigating, lastActionTimestamp, isPlayingThrough]); // Added isPlayingThrough
+
+  // Handle stopping play-through mode
   const handleStopPlayThrough = useCallback(() => {
+    // console.log("Stopping play through");
     setIsPlayingThrough(false);
   }, []);
-  
-  
-  useEffect(() => {
-    
-    
-    if (chess && currentMoveIndex >= 0 && false) { 
-      
-      const fen = chess?.fen(); 
-      console.debug(`Current position at move ${currentMoveIndex}: ${fen}`);
-    }
-  }, [chess, currentMoveIndex]);
 
-  
-  const downloadPGN = () => {
-    if (!game?.pgn) {
-      toast.error("No PGN available to download");
+
+  // ...existing code...
+
+
+  const downloadPGN = useCallback(() => {
+    if (!game || !chess || !moveAnalysis || moveAnalysis.length === 0) { // Check analysis existence
+      toast.error("No game data or analysis available");
       return;
     }
-
     try {
-      
-      let enhancedPGN = game.pgn;
+      const pgnHeader = chess.header(); // Get headers as object
+      const headerString = Object.entries(pgnHeader)
+        .map(([key, value]) => `[${key} "${value}"]`)
+        .join('\n');
 
-      
-      moveAnalysis.forEach((analysis) => {
-        if (!analysis) return;
+      let pgnMovesSection = "";
+      const tempChessForPgn = new Chess();
 
-        const moveComment = `{${analysis.quality} (${analysis.evaluation > 0 ? "+" : ""}${analysis.evaluation.toFixed(2)}).}`;
+      moveAnalysis.forEach((analysis, index) => {
+         if (!analysis || !moveHistory[index]) return; // Skip null analysis or missing history
 
-        
-        const movePattern = new RegExp(`(${analysis.moveText.replace(".", "\\.").replace("+", "\\+")})\\s`, "g");
-        enhancedPGN = enhancedPGN.replace(movePattern, `$1 ${moveComment} `);
+         // Attempt to make the move from history on the temp board
+         const moveDetail = moveHistory[index];
+         let moveResult;
+         try {
+            moveResult = tempChessForPgn.move({ from: moveDetail.from, to: moveDetail.to, promotion: moveDetail.promotion });
+            if (!moveResult) {
+                console.warn(`PGN Download: Failed to apply move ${index + 1} (${moveDetail.san}) to temp board.`);
+                return; // Skip this move if it fails
+            }
+         } catch (e) {
+            console.warn(`PGN Download: Error applying move ${index + 1} (${moveDetail.san}) to temp board:`, e);
+            return; // Skip this move on error
+         }
+
+
+         if (analysis.playerColor === 'white') {
+           pgnMovesSection += `${analysis.moveNumber}. `;
+         } else if (index === 0 || analysis.moveNumber !== moveAnalysis[index-1]?.moveNumber) { // Handle starting with black or new move number
+           pgnMovesSection += `${analysis.moveNumber}... `;
+         }
+         pgnMovesSection += `${moveResult.san} `; // Use SAN from successful move application
+         // Use analysis.quality here
+         const comment = `{[%csl G${moveResult.to},Y${moveResult.from}][%cal G${moveResult.to}] Quality: ${analysis.quality}; CPL: ${analysis.cpl.toFixed(2)}; EstRating: ${analysis.estimatedRatingAfterMove}} `; // Removed non-existent EstRating
+         pgnMovesSection += comment;
+         if (analysis.playerColor === 'black' || index === moveAnalysis.length - 1) { // Add newline after black's move or at the end
+           pgnMovesSection += '\n';
+         }
       });
 
-      
-      const whiteAccuracy = accuracies.white ? Math.round(accuracies.white * 100) : 0;
-      const blackAccuracy = accuracies.black ? Math.round(accuracies.black * 100) : 0;
+      const gameResult = pgnHeader.Result || "*";
+      const enhancedPGN = `${headerString}\n\n${pgnMovesSection.trim()} ${gameResult}`;
 
-      enhancedPGN = enhancedPGN.replace(
-        "[Event ",
-        `[WhiteAccuracy "${whiteAccuracy}%"]\n[BlackAccuracy "${blackAccuracy}%"]\n[AnalysisEngine "ChessAI v1.0"]\n[AnalysisDate "${new Date().toISOString()}"]\n[Event `
-      );
-
-      
-      const blob = new Blob([enhancedPGN], { type: "text/plain" });
+      const blob = new Blob([enhancedPGN], { type: "application/x-chess-pgn" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `analysis_${game.white.username}_vs_${game.black.username}.pgn`;
+      a.download = `analysis_${game?.white?.username ?? 'white'}_vs_${game?.black?.username ?? 'black'}.pgn`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-
       toast.success("Analysis PGN downloaded successfully");
+
     } catch (err) {
       console.error("Error downloading PGN:", err);
       toast.error("Error creating download");
     }
-  };
+  }, [chess, game, moveHistory, moveAnalysis]); // Correct dependencies
 
-  
-  const getCurrentMoveEstimatedRating = (color: 'white' | 'black') => {
-    const ratings = color === 'white' ? moveByMoveRatings.white : moveByMoveRatings.black;
-    
-    
-    if (currentMoveIndex === -1) {
-      return color === 'white' ? game.white?.rating || 0 : game.black?.rating || 0;
-    }
-    
-    
-    let colorMoveIndex = Math.floor(currentMoveIndex / 2);
-    
-    
-    if (color === 'black' && currentMoveIndex % 2 === 0) {
-      colorMoveIndex--;
-    }
-    
-    
-    if (color === 'white' && currentMoveIndex % 2 === 1) {
-      
-    }
-    
-    if (colorMoveIndex < 0 || colorMoveIndex >= ratings.length) {
-      return color === 'white' ? game.white?.rating || 0 : game.black?.rating || 0;
-    }
-    
-    return ratings[colorMoveIndex] || 0;  
-  };
 
-  const whiteCurrentRating = getCurrentMoveEstimatedRating('white');
-  const blackCurrentRating = getCurrentMoveEstimatedRating('black');
-
-  
+  // Function to get move quality CSS class (remains the same)
   const getMoveQualityClass = (quality: string): string => {
-    switch (quality) {
+    switch (quality) { // Expects "Brilliant", "Best", etc.
       case "Brilliant": return "text-purple-400";
-      case "Great": return "text-indigo-400";
+      case "Great": return "text-indigo-400"; // Added Great for variety
       case "Best": return "text-green-400";
-      case "Good": case "Excellent": return "text-blue-400";
-      case "Book": return "text-blue-400";
+      case "Excellent": return "text-blue-400"; // Renamed Good to Excellent
+      case "Good": return "text-sky-400"; // Added Good
+      case "Book": return "text-gray-400"; // Changed Book color
       case "Inaccuracy": return "text-yellow-400";
       case "Mistake": return "text-orange-400";
       case "Blunder": return "text-red-400";
-      default: return "text-gray-400";
+      default: return "text-gray-500"; // Default fallback
     }
   };
 
-  const isWhite = game?.white?.username.toLowerCase() === username.toLowerCase();
-  const boardOrientation = isWhite ? 'white' : 'black';
+  // ... (loading/error states remain the same) ...
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
-        <span className="ml-2">Loading game analysis...</span>
-      </div>
-    );
-  }
+     return (
+       <div className="flex justify-center items-center h-64">
+         <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
+         <span className="ml-2">Loading game...</span>
+       </div>
+     );
+   }
 
-  if (!chess) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <p className="text-red-500">Could not load game.</p>
-      </div>
-    );
-  }
+   if (isAnalyzing) {
+     return (
+       <div className="flex flex-col justify-center items-center h-64">
+         <RefreshCw className="h-8 w-8 animate-spin text-green-500" />
+         <span className="ml-2 mt-2">Analyzing game with engine... ({analysisProgress}%)</span>
+         <Progress value={analysisProgress} className="w-1/2 mt-2 h-2" />
+         <span className="text-xs text-gray-500 mt-1">This may take a moment...</span>
+       </div>
+     );
+   }
+
+
+   if (!chess) {
+     return (
+       <div className="flex justify-center items-center h-64">
+         <p className="text-red-500">Could not load game.</p>
+       </div>
+     );
+   }
+
+  const isWhite = game?.white?.username.toLowerCase() === username.toLowerCase();
+  const boardOrientation = isWhite ? 'white' : 'black';
+  const moveQualityCounts = deriveMoveQualityCounts(moveAnalysis);
+
 
   return (
     <div className="w-full">
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        {/* Chessboard and Controls Column */}
         <div className="md:col-span-3">
           <Card>
-            <CardHeader className="pb-2">
-              <div className="flex justify-between items-center">
-                <CardTitle className="text-lg">
-                  {game.white.username} vs {game.black.username}
-                  {game.timeControl && (
-                    <Badge variant="outline" className="ml-2 text-xs">
-                      {game.timeControl}
-                    </Badge>
-                  )}
-                </CardTitle>
-                {game.resultText && (
-                  <div className={`text-lg font-bold ${game.resultClass}`}>
-                    {game.resultText}
-                  </div>
-                )}
-              </div>
-            </CardHeader>
+            {/* ... CardHeader with game info ... */}
+             <CardHeader className="pb-2">
+               <div className="flex justify-between items-center">
+                 <CardTitle className="text-lg">
+                   {game?.white?.username ?? 'White'} vs {game?.black?.username ?? 'Black'}
+                   {game?.timeControl && (
+                     <Badge variant="outline" className="ml-2 text-xs">
+                       {game.timeControl}
+                     </Badge>
+                   )}
+                 </CardTitle>
+                 {game?.resultText && (
+                   <div className={`text-lg font-bold ${game.resultClass}`}>
+                     {game.resultText}
+                   </div>
+                 )}
+               </div>
+             </CardHeader>
             <CardContent className="pt-0">
               <div className="flex items-stretch">
+                {/* Evaluation Bar */}
                 <ChessEvaluationBar evaluation={evaluation} />
+                {/* Chessboard */}
                 <div className="flex-1">
-                  <Chessboard 
-                    position={chess.fen()} 
+                  <Chessboard
+                    id="ReviewBoard"
+                    position={chess.fen()}
                     boardOrientation={boardOrientation}
                     arePiecesDraggable={false}
+                    // Add custom squares, arrows if needed based on analysis
                   />
                 </div>
               </div>
-              
+
+              {/* Move Navigation and Download */}
               <div className="mt-4 border-t pt-4">
                 <div className="flex justify-between items-center">
-                  <div className="flex items-center space-x-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleFirstMove}
-                      disabled={currentMoveIndex === -1}
-                    >
-                      <SkipBack className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handlePrevMove}
-                      disabled={currentMoveIndex === -1}
-                    >
-                      <SkipBack className="h-4 w-4" />
-                    </Button>
-                    
-                    {isPlayingThrough ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleStopPlayThrough}
-                      >
-                        <Pause className="h-4 w-4" />
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handlePlayThrough}
-                        disabled={currentMoveIndex === moveHistory.length - 1}
-                      >
-                        <Play className="h-4 w-4" />
-                      </Button>
-                    )}
-                    
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleNextMove}
-                      disabled={currentMoveIndex === moveHistory.length - 1}
-                    >
-                      <SkipForward className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleLastMove}
-                      disabled={currentMoveIndex === moveHistory.length - 1}
-                    >
-                      <SkipForward className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={downloadPGN}
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Download Analysis
-                  </Button>
-                </div>
-                
-                <div className="mt-2">
-                  <div className="text-sm text-gray-500">
-                    Move {currentMoveIndex + 1} of {moveHistory.length}
-                  </div>
-                  <Progress
-                    value={(currentMoveIndex + 1) / Math.max(1, moveHistory.length) * 100}
-                    className="h-1 mt-1"
-                  />
-                </div>
-                
-                <div className="mt-4 flex justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="bg-white w-3 h-3 rounded-full"></div>
-                    <span>{game.white.username}</span>
-                    <span className="text-sm text-gray-500">
-                      {accuracies.white > 0 ? `${Math.round(accuracies.white * 100)}%` : ""}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-500">
-                      {accuracies.black > 0 ? `${Math.round(accuracies.black * 100)}%` : ""}
-                    </span>
-                    <span>{game.black.username}</span>
-                    <div className="bg-black w-3 h-3 rounded-full"></div>
-                  </div>
-                </div>
-                
-                <div className="mt-2 flex justify-between">
-                  <div className="flex gap-1">
-                    {capturedPieces.black.map((piece, i) => (
-                      <span key={i} className="text-lg">
-                        {piece}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="flex gap-1">
-                    {capturedPieces.white.map((piece, i) => (
-                      <span key={i} className="text-lg">
-                        {piece}
-                      </span>
-                    ))}
-                  </div>
-                </div>
+                   {/* Navigation Buttons */}
+                   <div className="flex items-center space-x-1">
+                     <Button variant="outline" size="sm" onClick={handleFirstMove} disabled={currentMoveIndex === -1 || isNavigating}>
+                       <SkipBack className="h-4 w-4" />
+                     </Button>
+                     <Button variant="outline" size="sm" onClick={handlePrevMove} disabled={currentMoveIndex === -1 || isNavigating}>
+                       <SkipBack className="h-4 w-4" /> {/* Icon might need changing */}
+                     </Button>
+                     {isPlayingThrough ? (
+                       <Button variant="outline" size="sm" onClick={handleStopPlayThrough}>
+                         <Pause className="h-4 w-4" />
+                       </Button>
+                     ) : (
+                       <Button variant="outline" size="sm" onClick={handlePlayThrough} disabled={currentMoveIndex === moveHistory.length - 1 || isNavigating}>
+                         <Play className="h-4 w-4" />
+                       </Button>
+                     )}
+                     <Button variant="outline" size="sm" onClick={handleNextMove} disabled={currentMoveIndex === moveHistory.length - 1 || isNavigating}>
+                       <SkipForward className="h-4 w-4" />
+                     </Button>
+                     <Button variant="outline" size="sm" onClick={handleLastMove} disabled={currentMoveIndex === moveHistory.length - 1 || isNavigating}>
+                       <SkipForward className="h-4 w-4" /> {/* Icon might need changing */}
+                     </Button>
+                   </div>
+                   {/* Download Button */}
+                   <Button variant="outline" size="sm" onClick={downloadPGN}>
+                     <Download className="h-4 w-4 mr-2" />
+                     Download Analysis
+                   </Button>
+                 </div>
+                {/* Progress Bar and Player Info */}
+                 <div className="mt-2">
+                   <div className="text-sm text-gray-500">
+                     Move {currentMoveIndex + 1} of {moveHistory.length}
+                   </div>
+                   <Progress
+                     value={moveHistory.length > 0 ? ((currentMoveIndex + 1) / moveHistory.length) * 100 : 0}
+                     className="h-1 mt-1"
+                   />
+                 </div>
+                 <div className="mt-4 flex justify-between">
+                   {/* White Player Info */}
+                   <div className="flex items-center gap-2">
+                     <div className="bg-white w-3 h-3 rounded-full border border-gray-300"></div>
+                     <span>{game?.white?.username ?? 'White'}</span>
+                     <span className="text-sm text-gray-500">
+                       {accuracies.white > 0 ? `${accuracies.white.toFixed(1)}%` : ""}
+                     </span>
+                   </div>
+                   {/* Black Player Info */}
+                   <div className="flex items-center gap-2">
+                     <span className="text-sm text-gray-500">
+                       {accuracies.black > 0 ? `${accuracies.black.toFixed(1)}%` : ""}
+                     </span>
+                     <span>{game?.black?.username ?? 'Black'}</span>
+                     <div className="bg-black w-3 h-3 rounded-full border border-gray-600"></div>
+                   </div>
+                 </div>
+                 {/* Captured Pieces */}
+                 <div className="mt-2 flex justify-between">
+                   <div className="flex gap-1">
+                     {capturedPieces.black.map((piece, i) => (
+                       <span key={i} className="text-lg text-gray-600"> {/* Adjusted color */}
+                         {piece}
+                       </span>
+                     ))}
+                   </div>
+                   <div className="flex gap-1">
+                     {capturedPieces.white.map((piece, i) => (
+                       <span key={i} className="text-lg text-gray-600"> {/* Adjusted color */}
+                         {piece}
+                       </span>
+                     ))}
+                   </div>
+                 </div>
               </div>
             </CardContent>
           </Card>
         </div>
-        
+
+        {/* Stats and Move List Column */}
         <div className="md:col-span-2 flex flex-col gap-4">
-          <ChessPlayerStats 
-            whiteUsername={game.white.username} 
-            blackUsername={game.black.username}
-            whiteRating={game.white.rating}
-            blackRating={game.black.rating}
-            whiteAccuracy={accuracies.white}
-            blackAccuracy={accuracies.black}
-            moveQuality={moveQuality}
-            estimatedPerformance={{
-              white: whiteCurrentRating || 0,  
-              black: blackCurrentRating || 0   
-            }}
-            currentMoveIndex={currentMoveIndex}
+          {/* Player Stats Component */}
+          <ChessPlayerStats
+            whiteUsername={game?.white?.username ?? 'White'}
+            blackUsername={game?.black?.username ?? 'Black'}
+            whiteRating={game?.white?.rating}
+            blackRating={game?.black?.rating}
+            whiteAccuracy={accuracies.white} // Pass final accuracy
+            blackAccuracy={accuracies.black} // Pass final accuracy
+            moveQuality={moveQualityCounts} // Pass move quality counts (uncommented)
+            estimatedPerformance={overallEstimatedRatings} // Pass final estimated ratings
           />
-          
+
+          {/* Move List Component */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Move List</CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
-              <ChessMoveList 
-                moves={moveHistory} 
-                currentMoveIndex={currentMoveIndex} 
-                onSelectMove={goToMove}
+              <ChessMoveList
+                moves={moveHistory}
+                currentMoveIndex={currentMoveIndex}
+                onSelectMove={goToMove} // Use the updated goToMove
                 isNavigating={isNavigating}
+                // Pass moveAnalysis to enable quality styling in the list
+                moveAnalysis={moveAnalysis}
               />
             </CardContent>
           </Card>
         </div>
       </div>
-      
+
+      {/* Analysis Tabs */}
       <div className="mt-6">
         <Tabs defaultValue="analysis">
           <TabsList>
             <TabsTrigger value="analysis">Analysis</TabsTrigger>
             <TabsTrigger value="insights">Insights</TabsTrigger>
           </TabsList>
-          
+
+          {/* Move-by-Move Analysis Tab */}
           <TabsContent value="analysis">
             <Card>
               <CardHeader>
@@ -1078,133 +999,109 @@ const GameReview = ({ game, username, isOpen = true }: GameReviewProps) => {
                       <tr className="border-b">
                         <th className="text-left p-2">#</th>
                         <th className="text-left p-2">Move</th>
-                        <th className="text-left p-2">Player</th>
                         <th className="text-left p-2">Eval</th>
-                        <th className="text-left p-2">Diff</th>
+                        <th className="text-left p-2">CPL</th>
                         <th className="text-left p-2">Quality</th>
+                        {/* Add Est. Rating column header back */}
+                        <th className="text-left p-2">Est. Rating</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {moveAnalysis.map((analysis: MoveAnalysis | null, index) => analysis && ( 
-                        <tr 
-                          key={index} 
-                          className="border-b hover:bg-gray-50 cursor-pointer"
-                          onClick={() => goToMove(index)}
-                        >
-                          <td className="p-2">{analysis.moveNumber}</td>
-                          <td className="p-2 font-medium">{analysis.moveText}</td>
-                          <td className="p-2">{analysis.playerColor === 'white' ? 'White' : 'Black'}</td>
-                          <td className="p-2 font-mono">
-                            {analysis.evaluation > 0 ? '+' : ''}
-                            {analysis.evaluation.toFixed(2)}
-                          </td>
-                          <td className={`p-2 font-mono ${
-                            analysis.evalDifference > 0.2 ? 'text-red-500' : 
-                            analysis.evalDifference < -0.2 ? 'text-green-500' : ''
-                          }`}>
-                            {analysis.evalDifference > 0 ? '+' : ''}
-                            {analysis.evalDifference.toFixed(2)}
-                          </td>
-                          <td className={`p-2 ${getMoveQualityClass(analysis.quality)}`}>
-                            {analysis.quality}
-                          </td>
-                        </tr>
-                      ))}
+                      {moveAnalysis.filter((analysis): analysis is MoveAnalysis => analysis !== null).map((analysis) => {
+                         const originalIndex = moveAnalysis.findIndex(a => a === analysis);
+                         if (originalIndex === -1) return null;
+
+                         return (
+                           <tr
+                             key={`${originalIndex}-${analysis.move}`}
+                             className={`border-b hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer ${currentMoveIndex === originalIndex ? 'bg-blue-100 dark:bg-blue-900' : ''} ${analysis.playerColor === 'black' ? 'bg-gray-50 dark:bg-gray-700/30' : ''}`}
+                             onClick={() => goToMove(originalIndex)}
+                           >
+                             <td className="p-2">{analysis.moveNumber}{analysis.playerColor === 'white' ? '.' : '...'}</td>
+                             <td className="p-2 font-medium">{analysis.move}</td>
+                             <td className="p-2 font-mono"> {analysis.evaluation > 0 ? '+' : ''} {analysis.evaluation.toFixed(2)} </td>
+                             <td className={`p-2 font-mono ${analysis.cpl > 70 ? 'text-red-500' : analysis.cpl > 30 ? 'text-yellow-500' : ''}`}> {analysis.cpl.toFixed(2)} </td>
+                             <td className={`p-2 ${getMoveQualityClass(analysis.quality)}`}> {analysis.quality} </td>
+                             {/* Add Est. Rating cell back */}
+                             <td className="p-2 font-mono"> {analysis.estimatedRatingAfterMove} </td>
+                           </tr>
+                         );
+                       })}
                     </tbody>
                   </table>
                 </div>
               </CardContent>
             </Card>
           </TabsContent>
-          
+
+          {/* Insights Tab */}
           <TabsContent value="insights">
-            <Card>
-              <CardHeader>
-                <CardTitle>Game Insights</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <h3 className="font-bold mb-2">Critical Moments</h3>
-                    {moveAnalysis.filter((m): m is MoveAnalysis => !!m && (m.quality === 'Blunder' || m.quality === 'Brilliant')).length > 0 ? ( 
-                      <div className="space-y-2">
-                        {moveAnalysis
-                          .filter((m): m is MoveAnalysis => !!m && (m.quality === 'Blunder' || m.quality === 'Brilliant')) 
-                          .slice(0, 3)
-                          .map((analysis, i) => (
-                            <div 
-                              key={i} 
-                              className="p-2 border rounded hover:bg-gray-50 cursor-pointer"
-                              onClick={() => goToMove(moveAnalysis.findIndex(ma => ma === analysis))} 
-                            >
-                              <div className="flex justify-between">
-                                <span>{analysis.moveText}</span>
-                                <span className={getMoveQualityClass(analysis.quality)}>
-                                  {analysis.quality}
-                                </span>
-                              </div>
-                              <div className="text-sm text-gray-500">
-                                Eval change: {analysis.evalDifference > 0 ? '+' : ''}
-                                {analysis.evalDifference.toFixed(2)}
-                              </div>
-                            </div>
-                          ))
-                        }
-                      </div>
-                    ) : (
-                      <p className="text-gray-500">No critical moments identified yet.</p>
-                    )}
-                  </div>
-                  
-                  <div>
-                    <h3 className="font-bold mb-2">Move Quality Summary</h3>
-                    <div className="space-y-2">
-                      <div className="flex justify-between">
-                        <span>Best Moves:</span>
-                        <span className="font-medium text-green-500">
-                          {
-                            moveAnalysis.filter((m): m is MoveAnalysis => 
-                              !!m && (m.quality === 'Best' || 
-                              m.quality === 'Brilliant' || 
-                              m.quality === 'Great')
-                            ).length
-                          }
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Good Moves:</span>
-                        <span className="font-medium text-blue-500">
-                          {
-                            moveAnalysis.filter((m): m is MoveAnalysis => 
-                              !!m && (m.quality === 'Good' || 
-                              m.quality === 'Excellent')
-                            ).length
-                          }
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Inaccuracies/Mistakes:</span>
-                        <span className="font-medium text-yellow-500">
-                          {
-                            moveAnalysis.filter((m): m is MoveAnalysis => 
-                              !!m && (m.quality === 'Inaccuracy' || 
-                              m.quality === 'Mistake')
-                            ).length
-                          }
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Blunders:</span>
-                        <span className="font-medium text-red-500">
-                          {moveAnalysis.filter((m): m is MoveAnalysis => !!m && m.quality === 'Blunder').length} 
-                        </span>
-                      </div>
+             <Card>
+               <CardHeader>
+                 <CardTitle>Game Insights</CardTitle>
+               </CardHeader>
+               <CardContent>
+                 {/* Add insights based on the new analysis data */}
+                 <p>Summary of move quality and key moments.</p>
+                 {/* Example: Find critical moments (Blunders/Mistakes) */}
+                 <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <h3 className="font-bold mb-2">White ({game?.white?.username})</h3>
+                        {moveQualityCounts.white.total > 0 ? ( // Use lowercase total
+                            <ul>
+                                {Object.entries(moveQualityCounts.white)
+                                    // Use lowercase key and check value > 0
+                                    .filter(([key, value]) => key !== 'total' && value > 0)
+                                    .map(([key, value]) => (
+                                    // Use getMoveQualityClass with capitalized key for styling
+                                    <li key={`w-${key}`} className={`${getMoveQualityClass(key.charAt(0).toUpperCase() + key.slice(1))}`}>
+                                        {/* Display capitalized key */}
+                                        {key.charAt(0).toUpperCase() + key.slice(1)}: {value} ({(value / moveQualityCounts.white.total * 100).toFixed(1)}%)
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : <p className="text-gray-500">No moves analyzed.</p>}
                     </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
+                    <div>
+                        <h3 className="font-bold mb-2">Black ({game?.black?.username})</h3>
+                         {moveQualityCounts.black.total > 0 ? ( // Use lowercase total
+                            <ul>
+                                {Object.entries(moveQualityCounts.black)
+                                    // Use lowercase key and check value > 0
+                                    .filter(([key, value]) => key !== 'total' && value > 0)
+                                    .map(([key, value]) => (
+                                     // Use getMoveQualityClass with capitalized key for styling
+                                    <li key={`b-${key}`} className={`${getMoveQualityClass(key.charAt(0).toUpperCase() + key.slice(1))}`}>
+                                        {/* Display capitalized key */}
+                                        {key.charAt(0).toUpperCase() + key.slice(1)}: {value} ({(value / moveQualityCounts.black.total * 100).toFixed(1)}%)
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : <p className="text-gray-500">No moves analyzed.</p>}
+                    </div>
+                 </div>
+                 <div className="mt-4">
+                   <h3 className="font-bold mb-2">Critical Moves</h3>
+                   {/* Filter using analysis.quality */}
+                   {moveAnalysis.filter(m => m?.quality === 'Blunder' || m?.quality === 'Mistake').length > 0 ? (
+                     <ul className="space-y-1">
+                       {/* Filter using analysis.quality */}
+                       {moveAnalysis.filter((m): m is MoveAnalysis => !!m && (m.quality === 'Blunder' || m.quality === 'Mistake')).map((m) => {
+                         const originalIndex = moveAnalysis.findIndex(ma => ma === m);
+                         return (
+                           <li key={originalIndex} className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 p-1 rounded flex justify-between items-center" onClick={() => goToMove(originalIndex)}>
+                             <span>{m.moveText} ({m.playerColor})</span>
+                             {/* Use analysis.quality */}
+                             <span className={`${getMoveQualityClass(m.quality)} font-semibold`}>{m.quality} (CPL: {m.cpl.toFixed(2)})</span>
+                           </li>
+                         );
+                       })}
+                     </ul>
+                   ) : <p className="text-gray-500">No significant mistakes or blunders found.</p>}
+                 </div>
+               </CardContent>
+             </Card>
+           </TabsContent>
         </Tabs>
       </div>
     </div>
