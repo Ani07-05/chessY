@@ -109,7 +109,7 @@ export default function Dashboard() {
 
   const FIRST_CLASS_DATE = new Date("2025-03-03")
   const CLASS_INTERVAL = 7 // days
-  const LATEST_CLASS_URL = "https://youtu.be/VQgKSLkUNvQ?si=ptTZQqOEiYHxh_3P"
+  const LATEST_CLASS_URL = "https://youtu.be/mpKAw1Sf_As?si=QGnqujweCPZmqBpU"
 
   const getNextClassDate = (fromDate: Date = new Date()): Date => {
     const nextDate = new Date(FIRST_CLASS_DATE)
